@@ -16,7 +16,7 @@ use yubikey::{
 };
 
 use crate::fl;
-use crate::{error::Error, key::Stub, p256::Recipient, BINARY_NAME, USABLE_SLOTS};
+use crate::{error::Error, key::Stub, x25519::Recipient, BINARY_NAME, USABLE_SLOTS};
 
 pub(crate) const POLICY_EXTENSION_OID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.41482.3.8");

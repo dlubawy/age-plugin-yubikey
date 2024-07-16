@@ -15,6 +15,7 @@ use crate::{
     key::{self, Stub},
     p256::Recipient,
     util::{Metadata, UsagePolicies},
+    x25519::Recipient,
     BINARY_NAME, USABLE_SLOTS,
 };
 
@@ -103,7 +104,7 @@ impl IdentityBuilder {
         let generated = yubikey_generate(
             yubikey,
             SlotId::Retired(slot),
-            AlgorithmId::EccP256,
+            AlgorithmId::X25519,
             policies.pin,
             policies.touch,
         )?;

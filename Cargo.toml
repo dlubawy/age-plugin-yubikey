@@ -39,7 +39,9 @@ rand = "0.8"
 sha2 = "0.10"
 which = "5"
 x509-cert = "0.2"
-yubikey = { version = "0.8", features = ["untested"] }
+yubikey = { git = "file:///Users/drew/Desktop/yubikey.rs", branch = "rebase/curve_25519", features = ["untested"] }
+curve25519-dalek = "4"
+x25519-dalek = "2"
 
 # Translations
 i18n-embed = { version = "0.15", features = ["desktop-requester", "fluent-system"] }
