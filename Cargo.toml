@@ -39,7 +39,9 @@ sha2 = "0.10"
 which = "5"
 x509 = "0.2"
 x509-parser = "0.14"
-yubikey = { version = "=0.8.0-pre.0", features = ["untested"] }
+yubikey = { git = "https://github.com/dlubawy/yubikey.rs", branch = "curve_25519", features = ["untested"] }
+curve25519-dalek = "4"
+x25519-dalek = "2"
 
 # Translations
 i18n-embed = { version = "0.14", features = ["desktop-requester", "fluent-system"] }

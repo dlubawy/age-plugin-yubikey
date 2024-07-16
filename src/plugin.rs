@@ -7,7 +7,7 @@ use age_plugin::{
 use std::collections::HashMap;
 use std::io;
 
-use crate::{fl, format, key, p256::Recipient, PLUGIN_NAME};
+use crate::{fl, format, key, x25519::Recipient, PLUGIN_NAME};
 
 #[derive(Debug, Default)]
 pub(crate) struct RecipientPlugin {

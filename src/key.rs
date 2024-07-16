@@ -26,8 +26,8 @@ use crate::{
     error::Error,
     fl,
     format::{RecipientLine, STANZA_KEY_LABEL},
-    p256::{Recipient, TAG_BYTES},
     util::{otp_serial_prefix, Metadata},
+    x25519::{Recipient, TAG_BYTES},
     IDENTITY_PREFIX,
 };
 
@@ -722,8 +722,8 @@ impl Connection {
         // uncompressed SEC-1 encoding.
         let shared_secret = match decrypt_data(
             &mut self.yubikey,
-            line.epk_bytes.decompress().as_bytes(),
-            AlgorithmId::EccP256,
+            line.epk_bytes.as_bytes(),
+            AlgorithmId::X25519,
             SlotId::Retired(self.slot),
         ) {
             Ok(res) => res,
@@ -741,7 +741,7 @@ impl Connection {
 
         let mut salt = vec![];
         salt.extend_from_slice(line.epk_bytes.as_bytes());
-        salt.extend_from_slice(self.pk.to_encoded().as_bytes());
+        salt.extend_from_slice(self.pk.as_bytes());
 
         let enc_key = hkdf(&salt, STANZA_KEY_LABEL, shared_secret.as_ref());
 
