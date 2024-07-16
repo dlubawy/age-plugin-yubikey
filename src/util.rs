@@ -8,7 +8,7 @@ use yubikey::{
 };
 
 use crate::fl;
-use crate::{error::Error, key::Stub, p256::Recipient, BINARY_NAME, USABLE_SLOTS};
+use crate::{error::Error, key::Stub, x25519::Recipient, USABLE_SLOTS};
 
 pub(crate) const POLICY_EXTENSION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 41482, 3, 8];
 
@@ -72,8 +72,8 @@ pub(crate) fn otp_serial_prefix(serial: Serial) -> String {
 
 pub(crate) fn extract_name(cert: &X509Certificate, all: bool) -> Option<(String, bool)> {
     // Look at Subject Organization to determine if we created this.
-    match cert.subject().iter_organization().next() {
-        Some(org) if org.as_str() == Ok(BINARY_NAME) => {
+    match cert.issuer().iter_common_name().next() {
+        Some(org) if org.as_str() == Ok("Yubico PIV Attestation") => {
             // We store the identity name as a Common Name attribute.
             let name = cert
                 .subject()

@@ -1,8 +1,7 @@
 use dialoguer::Password;
 use rand::{rngs::OsRng, RngCore};
-use x509::RelativeDistinguishedName;
 use yubikey::{
-    certificate::Certificate,
+    certificate::{CertInfo, Certificate},
     piv::{generate as yubikey_generate, AlgorithmId, RetiredSlotId, SlotId},
     Key, PinPolicy, TouchPolicy, YubiKey,
 };
@@ -11,9 +10,9 @@ use crate::{
     error::Error,
     fl,
     key::{self, Stub},
-    p256::Recipient,
-    util::{Metadata, POLICY_EXTENSION_OID},
-    BINARY_NAME, USABLE_SLOTS,
+    util::Metadata,
+    x25519::Recipient,
+    USABLE_SLOTS,
 };
 
 pub(crate) const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
@@ -99,7 +98,7 @@ impl IdentityBuilder {
         let generated = yubikey_generate(
             yubikey,
             SlotId::Retired(slot),
-            AlgorithmId::EccP256,
+            AlgorithmId::X25519,
             pin_policy,
             touch_policy,
         )?;
@@ -135,22 +134,9 @@ impl IdentityBuilder {
             eprintln!("{}", fl!("builder-touch-yk"));
         }
 
-        let cert = Certificate::generate_self_signed(
-            yubikey,
-            SlotId::Retired(slot),
-            serial,
-            None,
-            &[
-                RelativeDistinguishedName::organization(BINARY_NAME),
-                RelativeDistinguishedName::organizational_unit(env!("CARGO_PKG_VERSION")),
-                RelativeDistinguishedName::common_name(&name),
-            ],
-            generated,
-            &[x509::Extension::regular(
-                POLICY_EXTENSION_OID,
-                &[pin_policy.into(), touch_policy.into()],
-            )],
-        )?;
+        let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
+        let cert = Certificate::from_bytes(buf).unwrap();
+        cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
         let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
 

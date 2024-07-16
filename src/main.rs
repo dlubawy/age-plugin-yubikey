@@ -21,6 +21,7 @@ mod key;
 mod p256;
 mod plugin;
 mod util;
+mod x25519;
 
 use error::Error;
 
@@ -28,7 +29,7 @@ const PLUGIN_NAME: &str = "yubikey";
 const BINARY_NAME: &str = "age-plugin-yubikey";
 const RECIPIENT_PREFIX: &str = "age1yubikey";
 const IDENTITY_PREFIX: &str = "age-plugin-yubikey-";
-const STANZA_TAG: &str = "piv-p256";
+const STANZA_TAG: &str = "piv-x25519";
 
 const USABLE_SLOTS: [RetiredSlotId; 20] = [
     RetiredSlotId::R1,
@@ -194,7 +195,7 @@ fn generate(flags: PluginFlags) -> Result<(), Error> {
 fn print_single(
     serial: Option<Serial>,
     slot: RetiredSlotId,
-    printer: impl Fn(key::Stub, p256::Recipient, util::Metadata),
+    printer: impl Fn(key::Stub, x25519::Recipient, util::Metadata),
 ) -> Result<(), Error> {
     let mut yubikey = key::open(serial)?;
 
@@ -216,7 +217,7 @@ fn print_multiple(
     kind: &str,
     serial: Option<Serial>,
     all: bool,
-    printer: impl Fn(key::Stub, p256::Recipient, util::Metadata),
+    printer: impl Fn(key::Stub, x25519::Recipient, util::Metadata),
 ) -> Result<(), Error> {
     let mut readers = Context::open()?;
 
@@ -256,7 +257,7 @@ fn print_details(
     kind: &str,
     flags: PluginFlags,
     all: bool,
-    printer: impl Fn(key::Stub, p256::Recipient, util::Metadata),
+    printer: impl Fn(key::Stub, x25519::Recipient, util::Metadata),
 ) -> Result<(), Error> {
     if let Some(slot) = flags.slot {
         print_single(flags.serial, slot, printer)
