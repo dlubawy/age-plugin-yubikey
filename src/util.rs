@@ -1,7 +1,7 @@
 use std::fmt;
 use std::iter;
 
-use p256::pkcs8::{AssociatedOid, ObjectIdentifier};
+use pkcs8::AssociatedOid;
 use x509_cert::{
     der::{
         self,
@@ -9,14 +9,15 @@ use x509_cert::{
         Decode,
     },
     ext::AsExtension,
+    spki::ObjectIdentifier,
 };
 use yubikey::{
-    piv::{RetiredSlotId, SlotId},
+    piv::{AlgorithmId, RetiredSlotId, SlotId},
     Certificate, PinPolicy, Serial, TouchPolicy, YubiKey,
 };
 
 use crate::fl;
-use crate::{error::Error, key::Stub, x25519::Recipient, BINARY_NAME, USABLE_SLOTS};
+use crate::{error::Error, key::Stub, key::YubikeyRecipient, BINARY_NAME, USABLE_SLOTS};
 
 pub(crate) const POLICY_EXTENSION_OID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.41482.3.8");
@@ -78,6 +79,14 @@ impl AsExtension for UsagePolicies {
     ) -> bool {
         // TODO: https://github.com/RustCrypto/formats/issues/1490
         false
+    }
+}
+
+pub(crate) fn algorithm_from_string(s: String) -> Result<AlgorithmId, Error> {
+    match s.as_str() {
+        "ECCP256" => Ok(AlgorithmId::EccP256),
+        "X25519" => Ok(AlgorithmId::X25519),
+        _ => Err(Error::YubiKey(yubikey::Error::AlgorithmError)),
     }
 }
 
@@ -268,7 +277,7 @@ impl fmt::Display for Metadata {
     }
 }
 
-pub(crate) fn print_identity(stub: Stub, recipient: Recipient, metadata: Metadata) {
+pub(crate) fn print_identity(stub: Stub, recipient: YubikeyRecipient, metadata: Metadata) {
     let recipient = recipient.to_string();
     if !console::user_attended() {
         let recipient = recipient.as_str();

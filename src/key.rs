@@ -16,7 +16,7 @@ use std::iter;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use yubikey::{
-    certificate::Certificate,
+    certificate::{Certificate, PublicKeyInfo},
     piv::{decrypt_data, AlgorithmId, RetiredSlotId, SlotId},
     reader::{Context, Reader},
     Key, MgmKey, PinPolicy, Serial, TouchPolicy, YubiKey,
@@ -25,14 +25,97 @@ use yubikey::{
 use crate::{
     error::Error,
     fl,
-    format::{RecipientLine, STANZA_KEY_LABEL},
+    format::RecipientLine,
     util::{otp_serial_prefix, Metadata},
-    x25519::{Recipient, TAG_BYTES},
     IDENTITY_PREFIX,
 };
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const FIFTEEN_SECONDS: Duration = Duration::from_secs(15);
+const TAG_BYTES: usize = 4;
+
+#[derive(Clone)]
+pub(crate) enum YubikeyRecipient {
+    EccP256(crate::p256::Recipient),
+    X25519(crate::x25519::Recipient),
+}
+
+impl fmt::Debug for YubikeyRecipient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EccP256(recipient) => recipient.fmt(f),
+            Self::X25519(recipient) => recipient.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for YubikeyRecipient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EccP256(p256) => p256.fmt(f),
+            Self::X25519(x25519) => x25519.fmt(f),
+        }
+    }
+}
+
+impl YubikeyRecipient {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() == 32 {
+            match crate::x25519::Recipient::from_bytes(bytes) {
+                Some(recipient) => Some(YubikeyRecipient::X25519(recipient)),
+                _ => None,
+            }
+        } else {
+            match crate::p256::Recipient::from_bytes(bytes) {
+                Some(recipient) => Some(YubikeyRecipient::EccP256(recipient)),
+                _ => None,
+            }
+        }
+    }
+    pub(crate) fn from_spki(spki: &PublicKeyInfo) -> Option<Self> {
+        match spki.algorithm() {
+            AlgorithmId::EccP256 => {
+                crate::p256::Recipient::from_spki(spki).map(YubikeyRecipient::EccP256)
+            }
+            AlgorithmId::X25519 => {
+                crate::x25519::Recipient::from_spki(spki).map(YubikeyRecipient::X25519)
+            }
+            _ => None,
+        }
+    }
+    fn from_certificate(cert: &Certificate) -> Option<Self> {
+        match cert.subject_pki().algorithm() {
+            AlgorithmId::EccP256 => {
+                crate::p256::Recipient::from_certificate(cert).map(YubikeyRecipient::EccP256)
+            }
+            AlgorithmId::X25519 => {
+                crate::x25519::Recipient::from_certificate(cert).map(YubikeyRecipient::X25519)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn to_encoded(&self) -> Option<p256::EncodedPoint> {
+        match self {
+            Self::EccP256(recipient) => Some(recipient.to_encoded()),
+            _ => None,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::EccP256(_) => todo!(),
+            Self::X25519(recipient) => recipient.as_bytes(),
+        }
+    }
+
+    fn tag(&self) -> [u8; TAG_BYTES] {
+        match self {
+            Self::EccP256(recipient) => recipient.tag(),
+            Self::X25519(recipient) => recipient.tag(),
+        }
+    }
+}
 
 pub(crate) fn is_connected(reader: Reader) -> bool {
     filter_connected(&reader)
@@ -392,13 +475,13 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
 /// corresponding recipient if the key is compatible with this plugin.
 pub(crate) fn list_slots(
     yubikey: &mut YubiKey,
-) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Option<Recipient>)>, Error> {
+) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Option<YubikeyRecipient>)>, Error> {
     Ok(Key::list(yubikey)?.into_iter().filter_map(|key| {
         // We only use the retired slots.
         match key.slot() {
             SlotId::Retired(slot) => {
                 // Only P-256 keys are compatible with us.
-                let recipient = Recipient::from_certificate(key.certificate());
+                let recipient = YubikeyRecipient::from_certificate(key.certificate());
                 Some((key, slot, recipient))
             }
             _ => None,
@@ -409,7 +492,7 @@ pub(crate) fn list_slots(
 /// Returns an iterator of keys that are compatible with this plugin.
 pub(crate) fn list_compatible(
     yubikey: &mut YubiKey,
-) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Recipient)>, Error> {
+) -> Result<impl Iterator<Item = (Key, RetiredSlotId, YubikeyRecipient)>, Error> {
     list_slots(yubikey)
         .map(|iter| iter.filter_map(|(key, slot, res)| res.map(|recipient| (key, slot, recipient))))
 }
@@ -449,7 +532,7 @@ impl Stub {
     ///
     /// Does not check that the `PublicKey` matches the given `(Serial, SlotId)` tuple;
     /// this is checked at decryption time.
-    pub(crate) fn new(serial: Serial, slot: RetiredSlotId, recipient: &Recipient) -> Self {
+    pub(crate) fn new(serial: Serial, slot: RetiredSlotId, recipient: &YubikeyRecipient) -> Self {
         Stub {
             serial,
             slot,
@@ -605,7 +688,7 @@ impl Stub {
         let (cert, pk) = match Certificate::read(&mut yubikey, SlotId::Retired(self.slot))
             .ok()
             .and_then(|cert| {
-                Recipient::from_certificate(&cert)
+                YubikeyRecipient::from_certificate(&cert)
                     .filter(|pk| pk.tag() == self.tag)
                     .map(|pk| (cert, pk))
             }) {
@@ -634,7 +717,7 @@ impl Stub {
 pub(crate) struct Connection {
     yubikey: YubiKey,
     cert: Certificate,
-    pk: Recipient,
+    pk: YubikeyRecipient,
     slot: RetiredSlotId,
     tag: [u8; 4],
     identity_index: usize,
@@ -643,7 +726,7 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn recipient(&self) -> &Recipient {
+    pub(crate) fn recipient(&self) -> &YubikeyRecipient {
         &self.pk
     }
 
@@ -708,6 +791,8 @@ impl Connection {
     pub(crate) fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
         assert_eq!(self.tag, line.tag);
 
+        let algorithm = line.epk_bytes.algorithm();
+
         // Check if the touch policy requires a touch.
         let needs_touch = match (
             self.cached_metadata.as_ref().and_then(|m| m.touch_policy),
@@ -718,12 +803,16 @@ impl Connection {
             _ => false,
         };
 
+        let epk_bytes = match line.epk_bytes.public_key().decompress() {
+            Some(pk) => pk.as_bytes().to_owned(),
+            None => line.epk_bytes.as_bytes().to_vec(),
+        };
         // The YubiKey API for performing scalar multiplication takes the point in its
         // uncompressed SEC-1 encoding.
         let shared_secret = match decrypt_data(
             &mut self.yubikey,
-            line.epk_bytes.as_bytes(),
-            AlgorithmId::X25519,
+            &epk_bytes,
+            algorithm,
             SlotId::Retired(self.slot),
         ) {
             Ok(res) => res,
@@ -739,11 +828,22 @@ impl Connection {
             }
         }
 
+        let pk_bytes = match self.pk.to_encoded() {
+            Some(pk) => pk.as_bytes().to_owned(),
+            None => self.pk.as_bytes().to_vec(),
+        };
         let mut salt = vec![];
         salt.extend_from_slice(line.epk_bytes.as_bytes());
-        salt.extend_from_slice(self.pk.as_bytes());
+        salt.extend_from_slice(&pk_bytes);
 
-        let enc_key = hkdf(&salt, STANZA_KEY_LABEL, shared_secret.as_ref());
+        let enc_key = match algorithm {
+            AlgorithmId::X25519 => hkdf(
+                &salt,
+                crate::x25519::STANZA_KEY_LABEL,
+                shared_secret.as_ref(),
+            ),
+            _ => hkdf(&salt, crate::p256::STANZA_KEY_LABEL, shared_secret.as_ref()),
+        };
 
         // A failure to decrypt is fatal, because we assume that we won't
         // encounter 32-bit collisions on the key tag embedded in the header.

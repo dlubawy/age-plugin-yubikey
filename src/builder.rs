@@ -12,17 +12,18 @@ use yubikey::{
 use crate::{
     error::Error,
     fl,
-    key::{self, Stub},
-    p256::Recipient,
-    util::{Metadata, UsagePolicies},
-    x25519::Recipient,
+    key::{self, Stub, YubikeyRecipient},
+    util::UsagePolicies,
+    util::{Metadata, UsagePolicies, POLICY_EXTENSION_OID},
     BINARY_NAME, USABLE_SLOTS,
 };
 
+pub(crate) const DEFAULT_ALGORITHM: AlgorithmId = AlgorithmId::EccP256;
 pub(crate) const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
 pub(crate) const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
 
 pub(crate) struct IdentityBuilder {
+    algorithm: Option<AlgorithmId>,
     slot: Option<RetiredSlotId>,
     force: bool,
     name: Option<String>,
@@ -31,8 +32,9 @@ pub(crate) struct IdentityBuilder {
 }
 
 impl IdentityBuilder {
-    pub(crate) fn new(slot: Option<RetiredSlotId>) -> Self {
+    pub(crate) fn new(algorithm: Option<AlgorithmId>, slot: Option<RetiredSlotId>) -> Self {
         IdentityBuilder {
+            algorithm,
             slot,
             name: None,
             pin_policy: None,
@@ -61,7 +63,11 @@ impl IdentityBuilder {
         self
     }
 
-    pub(crate) fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
+    pub(crate) fn build(
+        self,
+        yubikey: &mut YubiKey,
+    ) -> Result<(Stub, YubikeyRecipient, Metadata), Error> {
+        let algorithm = self.algorithm.unwrap_or(DEFAULT_ALGORITHM);
         let slot = match self.slot {
             Some(slot) => {
                 if !self.force {
@@ -104,7 +110,7 @@ impl IdentityBuilder {
         let generated = yubikey_generate(
             yubikey,
             SlotId::Retired(slot),
-            AlgorithmId::X25519,
+            algorithm,
             policies.pin,
             policies.touch,
         )?;
@@ -112,8 +118,8 @@ impl IdentityBuilder {
         // TODO: https://github.com/RustCrypto/formats/issues/1488
         // Document `OwnedToRef` usage in top-level docs somewhere (either of the
         // crate, or of `SubjectPublicKeyInfoOwned` so we know how to get a reference).
-        let recipient = Recipient::from_spki(generated.owned_to_ref())
-            .expect("YubiKey generates a valid pubkey");
+        let recipient =
+            YubikeyRecipient::from_spki(&generated).expect("YubiKey generates a valid pubkey");
         let stub = Stub::new(yubikey.serial(), slot, &recipient);
 
         eprintln!();
@@ -150,28 +156,54 @@ impl IdentityBuilder {
         }
 
         // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
-        let cert = Certificate::generate_self_signed::<_, p256::NistP256>(
-            yubikey,
-            SlotId::Retired(slot),
-            serial,
-            Validity {
-                not_before: SystemTime::now().try_into().map_err(Error::Build)?,
-                not_after: x509_cert::time::Time::INFINITY,
-            },
-            // TODO: https://github.com/RustCrypto/formats/issues/1489
-            format!("O={BINARY_NAME},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
-                .parse()
-                .map_err(Error::Build)?,
-            generated,
-            // TODO: https://github.com/RustCrypto/formats/issues/1490
-            // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/580
-            |builder| {
-                builder.add_extension(&policies).map_err(|e| match e {
-                    x509_cert::builder::Error::Asn1(error) => error,
-                    e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
-                })
-            },
-        )?;
+        let cert = match algorithm {
+            AlgorithmId::X25519 => {
+                Certificate::generate_self_signed::<_, ed25519_dalek::SigningKey>(
+                    yubikey,
+                    SlotId::Retired(slot),
+                    serial,
+                    Validity {
+                        not_before: SystemTime::now().try_into().map_err(Error::Build)?,
+                        not_after: x509_cert::time::Time::INFINITY,
+                    },
+                    // TODO: https://github.com/RustCrypto/formats/issues/1489
+                    format!("O={BINARY_NAME},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
+                        .parse()
+                        .map_err(Error::Build)?,
+                    generated,
+                    // TODO: https://github.com/RustCrypto/formats/issues/1490
+                    // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/580
+                    |builder| {
+                        builder.add_extension(&policies).map_err(|e| match e {
+                            x509_cert::builder::Error::Asn1(error) => error,
+                            e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
+                        })
+                    },
+                )?
+            }
+            _ => Certificate::generate_self_signed::<_, p256::NistP256>(
+                yubikey,
+                SlotId::Retired(slot),
+                serial,
+                Validity {
+                    not_before: SystemTime::now().try_into().map_err(Error::Build)?,
+                    not_after: x509_cert::time::Time::INFINITY,
+                },
+                // TODO: https://github.com/RustCrypto/formats/issues/1489
+                format!("O={BINARY_NAME},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
+                    .parse()
+                    .map_err(Error::Build)?,
+                generated,
+                // TODO: https://github.com/RustCrypto/formats/issues/1490
+                // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/580
+                |builder| {
+                    builder.add_extension(&policies).map_err(|e| match e {
+                        x509_cert::builder::Error::Asn1(error) => error,
+                        e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
+                    })
+                },
+            )?,
+        };
 
         let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
 

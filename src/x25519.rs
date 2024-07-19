@@ -7,7 +7,11 @@ use std::fmt;
 
 use crate::RECIPIENT_PREFIX;
 
+pub(crate) const EPK_BYTES: usize = 32;
 pub(crate) const TAG_BYTES: usize = 4;
+pub(crate) const STANZA_TAG: &str = "piv-x25519";
+
+pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-x25519";
 
 #[derive(Clone)]
 pub struct Recipient(PublicKey);
@@ -35,7 +39,7 @@ impl fmt::Display for Recipient {
 impl Recipient {
     /// Attempts to parse a valid YubiKey recipient from its compressed SEC-1 byte encoding.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let data: [u8; 32] = bytes.try_into().unwrap();
+        let data: [u8; EPK_BYTES] = bytes.try_into().unwrap();
         match PublicKey::try_from(data) {
             Ok(pubkey) => Some(Self(pubkey)),
             _ => None,
