@@ -83,7 +83,10 @@ pub(crate) fn extract_name(cert: &X509Certificate, all: bool) -> Option<(String,
                 .map(|s| s.to_owned())
                 .unwrap_or_default(); // TODO: This should always be present.
 
-            Some((name, true))
+            match cert.public_key().algorithm.oid().to_string().as_str() {
+                "1.3.101.110" => Some((name, true)),
+                _ => Some((name, false)),
+            }
         }
         _ => {
             // Not one of ours, but we've already filtered for compatibility.
