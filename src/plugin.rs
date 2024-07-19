@@ -7,11 +7,11 @@ use age_plugin::{
 use std::collections::HashMap;
 use std::io;
 
-use crate::{fl, format, key, x25519::Recipient, PLUGIN_NAME};
+use crate::{fl, format, key, PLUGIN_NAME};
 
 #[derive(Debug, Default)]
 pub(crate) struct RecipientPlugin {
-    recipients: Vec<Recipient>,
+    recipients: Vec<key::YubikeyRecipient>,
     yubikeys: Vec<key::Stub>,
 }
 
@@ -23,7 +23,7 @@ impl RecipientPluginV1 for RecipientPlugin {
         bytes: &[u8],
     ) -> Result<(), recipient::Error> {
         if let Some(pk) = if plugin_name == PLUGIN_NAME {
-            Recipient::from_bytes(bytes)
+            key::YubikeyRecipient::from_bytes(bytes)
         } else {
             None
         } {

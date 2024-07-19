@@ -7,7 +7,11 @@ use std::fmt;
 
 use crate::RECIPIENT_PREFIX;
 
+pub(crate) const EPK_BYTES: usize = 33;
 pub(crate) const TAG_BYTES: usize = 4;
+pub(crate) const STANZA_TAG: &str = "piv-p256";
+
+pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-p256";
 
 /// Wrapper around a compressed secp256r1 curve point.
 #[derive(Clone)]
