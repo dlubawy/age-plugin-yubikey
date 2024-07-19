@@ -116,11 +116,6 @@ impl IdentityBuilder {
                 .interact()?;
             yubikey.verify_pin(pin.as_bytes())?;
         }
-        if let TouchPolicy::Never = touch_policy {
-            // No need to touch YubiKey
-        } else {
-            eprintln!("{}", fl!("builder-touch-yk"));
-        }
 
         let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
         let cert = Certificate::from_bytes(buf).unwrap();
