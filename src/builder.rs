@@ -21,7 +21,6 @@ pub(crate) const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
 pub(crate) struct IdentityBuilder {
     slot: Option<RetiredSlotId>,
     force: bool,
-    name: Option<String>,
     pin_policy: Option<PinPolicy>,
     touch_policy: Option<TouchPolicy>,
 }
@@ -30,16 +29,10 @@ impl IdentityBuilder {
     pub(crate) fn new(slot: Option<RetiredSlotId>) -> Self {
         IdentityBuilder {
             slot,
-            name: None,
             pin_policy: None,
             touch_policy: None,
             force: false,
         }
-    }
-
-    pub(crate) fn with_name(mut self, name: Option<String>) -> Self {
-        self.name = name;
-        self
     }
 
     pub(crate) fn with_pin_policy(mut self, pin_policy: Option<PinPolicy>) -> Self {
@@ -104,7 +97,6 @@ impl IdentityBuilder {
         )?;
 
         let recipient = Recipient::from_spki(&generated).expect("YubiKey generates a valid pubkey");
-        let stub = Stub::new(yubikey.serial(), slot, &recipient);
 
         eprintln!();
         eprintln!("{}", fl!("builder-gen-cert"));
@@ -112,10 +104,6 @@ impl IdentityBuilder {
         // Pick a random serial for the new self-signed certificate.
         let mut serial = [0; 20];
         OsRng.fill_bytes(&mut serial);
-
-        let name = self
-            .name
-            .unwrap_or(format!("age identity {}", hex::encode(stub.tag)));
 
         if let PinPolicy::Always = pin_policy {
             // We need to enter the PIN again.
@@ -136,7 +124,7 @@ impl IdentityBuilder {
 
         let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
         let cert = Certificate::from_bytes(buf).unwrap();
-        cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
+        let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
         let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
 

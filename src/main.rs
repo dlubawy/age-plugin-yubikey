@@ -18,7 +18,6 @@ mod builder;
 mod error;
 mod format;
 mod key;
-mod p256;
 mod plugin;
 mod util;
 mod x25519;
@@ -26,7 +25,6 @@ mod x25519;
 use error::Error;
 
 const PLUGIN_NAME: &str = "yubikey";
-const BINARY_NAME: &str = "age-plugin-yubikey";
 const RECIPIENT_PREFIX: &str = "age1yubikey";
 const IDENTITY_PREFIX: &str = "age-plugin-yubikey-";
 const STANZA_TAG: &str = "piv-x25519";
@@ -107,12 +105,6 @@ struct PluginOptions {
     )]
     list_all: bool,
 
-    #[options(
-        help = "Name for the generated identity. Defaults to 'age identity HEX_TAG'.",
-        no_short
-    )]
-    name: Option<String>,
-
     #[options(help = "One of [always, once, never]. Defaults to 'once'.", no_short)]
     pin_policy: Option<String>,
 
@@ -138,7 +130,6 @@ struct PluginOptions {
 struct PluginFlags {
     serial: Option<Serial>,
     slot: Option<RetiredSlotId>,
-    name: Option<String>,
     pin_policy: Option<PinPolicy>,
     touch_policy: Option<TouchPolicy>,
     force: bool,
@@ -162,7 +153,6 @@ impl TryFrom<PluginOptions> for PluginFlags {
         Ok(PluginFlags {
             serial,
             slot,
-            name: opts.name,
             pin_policy,
             touch_policy,
             force: opts.force,
@@ -174,7 +164,6 @@ fn generate(flags: PluginFlags) -> Result<(), Error> {
     let mut yubikey = key::open(flags.serial)?;
 
     let (stub, recipient, metadata) = builder::IdentityBuilder::new(flags.slot)
-        .with_name(flags.name)
         .with_pin_policy(flags.pin_policy)
         .with_touch_policy(flags.touch_policy)
         .force(flags.force)
@@ -478,16 +467,6 @@ fn main() -> Result<(), Error> {
                     return Ok(());
                 }
             } else {
-                let name = Input::<String>::new()
-                    .with_prompt(format!(
-                        "{} [{}]",
-                        fl!("cli-setup-name-identity"),
-                        flags.name.as_deref().unwrap_or("age identity TAG_HEX")
-                    ))
-                    .allow_empty(true)
-                    .report(true)
-                    .interact_text()?;
-
                 let mut displayed_yk4_warning = false;
                 let pin_policy = loop {
                     let pin_policy = match Select::new()
@@ -571,10 +550,6 @@ fn main() -> Result<(), Error> {
                     eprintln!();
                     (
                         builder::IdentityBuilder::new(Some(slot))
-                            .with_name(match name {
-                                s if s.is_empty() => flags.name,
-                                s => Some(s),
-                            })
                             .with_pin_policy(Some(pin_policy))
                             .with_touch_policy(Some(touch_policy))
                             .build(&mut yubikey)?,
