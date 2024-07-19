@@ -2,13 +2,14 @@ use std::fmt;
 use std::iter;
 
 use x509_parser::{certificate::X509Certificate, der_parser::oid::Oid};
+use yubikey::piv::AlgorithmId;
 use yubikey::{
     piv::{RetiredSlotId, SlotId},
     Certificate, PinPolicy, Serial, TouchPolicy, YubiKey,
 };
 
 use crate::fl;
-use crate::{error::Error, key::Stub, x25519::Recipient, USABLE_SLOTS};
+use crate::{error::Error, key::Stub, key::YubikeyRecipient, BINARY_NAME, USABLE_SLOTS};
 
 pub(crate) const POLICY_EXTENSION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 41482, 3, 8];
 
@@ -23,6 +24,14 @@ pub(crate) fn ui_to_slot(slot: u8) -> Result<RetiredSlotId, Error> {
 pub(crate) fn slot_to_ui(slot: &RetiredSlotId) -> u8 {
     // Use 1-indexing in the UI for niceness
     USABLE_SLOTS.iter().position(|s| s == slot).unwrap() as u8 + 1
+}
+
+pub(crate) fn algorithm_from_string(s: String) -> Result<AlgorithmId, Error> {
+    match s.as_str() {
+        "ECCP256" => Ok(AlgorithmId::EccP256),
+        "X25519" => Ok(AlgorithmId::X25519),
+        _ => Err(Error::YubiKey(yubikey::Error::AlgorithmError)),
+    }
 }
 
 pub(crate) fn pin_policy_from_string(s: String) -> Result<PinPolicy, Error> {
@@ -72,8 +81,8 @@ pub(crate) fn otp_serial_prefix(serial: Serial) -> String {
 
 pub(crate) fn extract_name(cert: &X509Certificate, all: bool) -> Option<(String, bool)> {
     // Look at Subject Organization to determine if we created this.
-    match cert.issuer().iter_common_name().next() {
-        Some(org) if org.as_str() == Ok("Yubico PIV Attestation") => {
+    match cert.issuer().iter_organization().next() {
+        Some(org) if org.as_str() == Ok(BINARY_NAME) => {
             // We store the identity name as a Common Name attribute.
             let name = cert
                 .subject()
@@ -202,7 +211,7 @@ impl fmt::Display for Metadata {
     }
 }
 
-pub(crate) fn print_identity(stub: Stub, recipient: Recipient, metadata: Metadata) {
+pub(crate) fn print_identity(stub: Stub, recipient: YubikeyRecipient, metadata: Metadata) {
     let recipient = recipient.to_string();
     if !console::user_attended() {
         let recipient = recipient.as_str();

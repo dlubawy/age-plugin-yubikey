@@ -1,5 +1,6 @@
 use dialoguer::Password;
 use rand::{rngs::OsRng, RngCore};
+use x509::RelativeDistinguishedName;
 use yubikey::{
     certificate::{CertInfo, Certificate},
     piv::{generate as yubikey_generate, AlgorithmId, RetiredSlotId, SlotId},
@@ -9,16 +10,17 @@ use yubikey::{
 use crate::{
     error::Error,
     fl,
-    key::{self, Stub},
-    util::Metadata,
-    x25519::Recipient,
-    USABLE_SLOTS,
+    key::{self, Stub, YubikeyRecipient},
+    util::{Metadata, POLICY_EXTENSION_OID},
+    BINARY_NAME, USABLE_SLOTS,
 };
 
+pub(crate) const DEFAULT_ALGORITHM: AlgorithmId = AlgorithmId::EccP256;
 pub(crate) const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
 pub(crate) const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
 
 pub(crate) struct IdentityBuilder {
+    algorithm: Option<AlgorithmId>,
     slot: Option<RetiredSlotId>,
     force: bool,
     name: Option<String>,
@@ -27,8 +29,9 @@ pub(crate) struct IdentityBuilder {
 }
 
 impl IdentityBuilder {
-    pub(crate) fn new(slot: Option<RetiredSlotId>) -> Self {
+    pub(crate) fn new(algorithm: Option<AlgorithmId>, slot: Option<RetiredSlotId>) -> Self {
         IdentityBuilder {
+            algorithm,
             slot,
             name: None,
             pin_policy: None,
@@ -57,7 +60,11 @@ impl IdentityBuilder {
         self
     }
 
-    pub(crate) fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
+    pub(crate) fn build(
+        self,
+        yubikey: &mut YubiKey,
+    ) -> Result<(Stub, YubikeyRecipient, Metadata), Error> {
+        let algorithm = self.algorithm.unwrap_or(AlgorithmId::EccP256);
         let slot = match self.slot {
             Some(slot) => {
                 if !self.force {
@@ -98,12 +105,13 @@ impl IdentityBuilder {
         let generated = yubikey_generate(
             yubikey,
             SlotId::Retired(slot),
-            AlgorithmId::X25519,
+            algorithm,
             pin_policy,
             touch_policy,
         )?;
 
-        let recipient = Recipient::from_spki(&generated).expect("YubiKey generates a valid pubkey");
+        let recipient =
+            YubikeyRecipient::from_spki(&generated).expect("YubiKey generates a valid pubkey");
         let stub = Stub::new(yubikey.serial(), slot, &recipient);
 
         eprintln!();
@@ -134,16 +142,46 @@ impl IdentityBuilder {
             eprintln!("{}", fl!("builder-touch-yk"));
         }
 
-        let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
-        let cert = Certificate::from_bytes(buf).unwrap();
-        cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
+        match algorithm {
+            AlgorithmId::X25519 => {
+                let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
+                let cert = Certificate::from_bytes(buf).unwrap();
+                let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
-        let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+                let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
 
-        Ok((
-            Stub::new(yubikey.serial(), slot, &recipient),
-            recipient,
-            metadata,
-        ))
+                Ok((
+                    Stub::new(yubikey.serial(), slot, &recipient),
+                    recipient,
+                    metadata,
+                ))
+            }
+            _ => {
+                let cert = Certificate::generate_self_signed(
+                    yubikey,
+                    SlotId::Retired(slot),
+                    serial,
+                    None,
+                    &[
+                        RelativeDistinguishedName::organization(BINARY_NAME),
+                        RelativeDistinguishedName::organizational_unit(env!("CARGO_PKG_VERSION")),
+                        RelativeDistinguishedName::common_name(&name),
+                    ],
+                    generated,
+                    &[x509::Extension::regular(
+                        POLICY_EXTENSION_OID,
+                        &[pin_policy.into(), touch_policy.into()],
+                    )],
+                )?;
+
+                let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+
+                Ok((
+                    Stub::new(yubikey.serial(), slot, &recipient),
+                    recipient,
+                    metadata,
+                ))
+            }
+        }
     }
 }
