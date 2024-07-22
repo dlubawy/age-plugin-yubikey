@@ -145,7 +145,7 @@ impl IdentityBuilder {
         match algorithm {
             AlgorithmId::X25519 => {
                 let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
-                let cert = Certificate::from_bytes(buf).unwrap();
+                let cert = Certificate::from_bytes(buf)?;
                 let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
                 let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();

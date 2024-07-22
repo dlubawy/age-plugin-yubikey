@@ -104,7 +104,7 @@ impl YubikeyRecipient {
 
     fn as_bytes(&self) -> &[u8] {
         match self {
-            Self::EccP256(_) => todo!(),
+            Self::EccP256(_) => unimplemented!("EccP256 cannot serialize directly to bytes"),
             Self::X25519(recipient) => recipient.as_bytes(),
         }
     }

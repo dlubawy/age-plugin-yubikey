@@ -39,7 +39,7 @@ impl fmt::Display for Recipient {
 impl Recipient {
     /// Attempts to parse a valid YubiKey recipient from its compressed SEC-1 byte encoding.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let data: [u8; EPK_BYTES] = bytes.try_into().unwrap();
+        let data: [u8; EPK_BYTES] = bytes.try_into().expect("correct key length");
         match PublicKey::try_from(data) {
             Ok(pubkey) => Some(Self(pubkey)),
             _ => None,
