@@ -564,7 +564,7 @@ impl Stub {
     }
 
     pub(crate) fn matches(&self, line: &RecipientLine) -> bool {
-        self.tag == line.tag
+        Some(self.tag) == line.tag || line.tag == None
     }
 
     /// Returns:
@@ -789,7 +789,9 @@ impl Connection {
     }
 
     pub(crate) fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
-        assert_eq!(self.tag, line.tag);
+        if line.tag != None {
+            assert_eq!(Some(self.tag), line.tag);
+        }
 
         let algorithm = line.epk_bytes.algorithm();
 

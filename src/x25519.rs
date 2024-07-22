@@ -9,9 +9,9 @@ use crate::RECIPIENT_PREFIX;
 
 pub(crate) const EPK_BYTES: usize = 32;
 pub(crate) const TAG_BYTES: usize = 4;
-pub(crate) const STANZA_TAG: &str = "piv-x25519";
+pub(crate) const STANZA_TAG: &str = "X25519";
 
-pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-x25519";
+pub(crate) const STANZA_KEY_LABEL: &[u8] = b"age-encryption.org/v1/X25519";
 
 #[derive(Clone)]
 pub struct Recipient(PublicKey);

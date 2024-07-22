@@ -102,20 +102,27 @@ impl EphemeralKeyBytes {
 
 #[derive(Debug)]
 pub(crate) struct RecipientLine {
-    pub(crate) tag: [u8; TAG_BYTES],
+    pub(crate) tag: Option<[u8; TAG_BYTES]>,
     pub(crate) epk_bytes: EphemeralKeyBytes,
     pub(crate) encrypted_file_key: [u8; ENCRYPTED_FILE_KEY_BYTES],
 }
 
 impl From<RecipientLine> for Stanza {
     fn from(r: RecipientLine) -> Self {
-        Stanza {
-            tag: r.epk_bytes.tag(),
-            args: vec![
-                BASE64_STANDARD_NO_PAD.encode(r.tag),
-                BASE64_STANDARD_NO_PAD.encode(r.epk_bytes.as_bytes()),
-            ],
-            body: r.encrypted_file_key.to_vec(),
+        match r.tag {
+            None => Stanza {
+                tag: crate::x25519::STANZA_TAG.to_string(),
+                args: vec![BASE64_STANDARD_NO_PAD.encode(r.epk_bytes.as_bytes())],
+                body: r.encrypted_file_key.to_vec(),
+            },
+            Some(tag) => Stanza {
+                tag: r.epk_bytes.tag(),
+                args: vec![
+                    BASE64_STANDARD_NO_PAD.encode(tag),
+                    BASE64_STANDARD_NO_PAD.encode(r.epk_bytes.as_bytes()),
+                ],
+                body: r.encrypted_file_key.to_vec(),
+            },
         }
     }
 }
@@ -145,13 +152,10 @@ impl RecipientLine {
         match algorithm {
             Some(AlgorithmId::X25519) => {
                 let (tag, epk_bytes) = match &s.args[..] {
-                    [tag, epk_bytes] => {
+                    [epk_bytes] => {
                         let base64_bytes =
                             base64_arg(epk_bytes, [0; crate::x25519::EPK_BYTES]).unwrap();
-                        (
-                            base64_arg(tag, [0; TAG_BYTES]),
-                            EphemeralKeyBytes::from_bytes(&s.tag, &base64_bytes),
-                        )
+                        (None, EphemeralKeyBytes::from_bytes(&s.tag, &base64_bytes))
                     }
                     _ => (None, None),
                 };
@@ -159,6 +163,11 @@ impl RecipientLine {
                 Some(match (tag, epk_bytes, s.body[..].try_into()) {
                     (Some(tag), Some(epk_bytes), Ok(encrypted_file_key)) => Ok(RecipientLine {
                         tag,
+                        epk_bytes,
+                        encrypted_file_key,
+                    }),
+                    (None, Some(epk_bytes), Ok(encrypted_file_key)) => Ok(RecipientLine {
+                        tag: None,
                         epk_bytes,
                         encrypted_file_key,
                     }),
@@ -181,7 +190,7 @@ impl RecipientLine {
 
                 Some(match (tag, epk_bytes, s.body[..].try_into()) {
                     (Some(tag), Some(epk_bytes), Ok(encrypted_file_key)) => Ok(RecipientLine {
-                        tag,
+                        tag: Some(tag),
                         epk_bytes,
                         encrypted_file_key,
                     }),
@@ -221,7 +230,7 @@ impl RecipientLine {
                 };
 
                 RecipientLine {
-                    tag: pk.tag(),
+                    tag: Some(pk.tag()),
                     epk_bytes,
                     encrypted_file_key,
                 }
@@ -250,7 +259,7 @@ impl RecipientLine {
                 };
 
                 RecipientLine {
-                    tag: pk.tag(),
+                    tag: None,
                     epk_bytes,
                     encrypted_file_key,
                 }

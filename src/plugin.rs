@@ -4,6 +4,7 @@ use age_plugin::{
     recipient::{self, RecipientPluginV1},
     Callbacks,
 };
+use core::panic;
 use std::collections::HashMap;
 use std::io;
 
