@@ -14,7 +14,7 @@ use crate::key::YubikeyRecipient;
 const TAG_BYTES: usize = 4;
 const ENCRYPTED_FILE_KEY_BYTES: usize = 32;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum PublicKey {
     EccP256(p256::EncodedPoint),
     X25519(x25519_dalek::PublicKey),
@@ -42,10 +42,13 @@ impl PublicKey {
 /// The ephemeral key bytes in a piv-p256 stanza.
 ///
 /// The bytes contain a compressed SEC-1 encoding of a valid point.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct EphemeralKeyBytes(PublicKey);
 
 impl EphemeralKeyBytes {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
     fn from_bytes(tag: &str, bytes: &[u8]) -> Option<Self> {
         match tag {
             crate::x25519::STANZA_TAG => {
@@ -100,7 +103,7 @@ impl EphemeralKeyBytes {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RecipientLine {
     pub(crate) tag: Option<[u8; TAG_BYTES]>,
     pub(crate) epk_bytes: EphemeralKeyBytes,
@@ -128,6 +131,13 @@ impl From<RecipientLine> for Stanza {
 }
 
 impl RecipientLine {
+    pub(crate) fn clone(&self) -> Self {
+        Self {
+            tag: self.tag,
+            epk_bytes: self.epk_bytes.clone(),
+            encrypted_file_key: self.encrypted_file_key,
+        }
+    }
     pub(super) fn from_stanza(s: &Stanza) -> Option<Result<Self, ()>> {
         let algorithm = match s.tag.as_str() {
             crate::p256::STANZA_TAG => Some(AlgorithmId::EccP256),

@@ -4,7 +4,6 @@ use age_plugin::{
     recipient::{self, RecipientPluginV1},
     Callbacks,
 };
-use core::panic;
 use std::collections::HashMap;
 use std::io;
 
@@ -162,16 +161,10 @@ impl IdentityPluginV1 for IdentityPlugin {
                     // Only record candidate stanzas for files without structural errors.
                     (Some(Ok(line)), false) => {
                         // A line will match at most one YubiKey.
-                        if let Some(files) =
-                            candidate_stanzas.iter_mut().find_map(|(stub, files)| {
-                                if stub.matches(&line) {
-                                    Some(files)
-                                } else {
-                                    None
-                                }
-                            })
-                        {
-                            files.entry(file).or_default().push(line);
+                        for (stub, files) in candidate_stanzas.iter_mut() {
+                            if stub.matches(&line) {
+                                files.entry(file).or_default().push(line.clone());
+                            }
                         }
                     }
                     (Some(Err(e)), _) => {
@@ -240,13 +233,19 @@ impl IdentityPluginV1 for IdentityPlugin {
                             file_keys.entry(file_index).or_insert(Ok(file_key));
                             break;
                         }
-                        Err(_) => callbacks
-                            .error(identity::Error::Stanza {
-                                file_index,
-                                stanza_index,
-                                message: fl!("plugin-err-decryption-failed"),
-                            })?
-                            .unwrap(),
+                        Err(_) => {
+                            if file_index < files.len() {
+                                continue;
+                            } else {
+                                callbacks
+                                    .error(identity::Error::Stanza {
+                                        file_index,
+                                        stanza_index,
+                                        message: fl!("plugin-err-decryption-failed"),
+                                    })?
+                                    .unwrap()
+                            }
+                        }
                     }
                 }
             }
