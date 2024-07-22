@@ -43,6 +43,7 @@ yubikey = { git = "file:///Users/drew/Desktop/yubikey.rs", branch = "rebase/curv
 pkcs8 = "0.10"
 curve25519-dalek = "4"
 x25519-dalek = "2"
+ed25519-dalek = "2"
 
 # Translations
 i18n-embed = { version = "0.15", features = ["desktop-requester", "fluent-system"] }
