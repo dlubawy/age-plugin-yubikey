@@ -148,7 +148,7 @@ impl IdentityBuilder {
                 let cert = Certificate::from_bytes(buf)?;
                 let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
-                let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+                let metadata = Metadata::extract(yubikey, slot, &cert, true).unwrap();
 
                 Ok((
                     Stub::new(yubikey.serial(), slot, &recipient),
