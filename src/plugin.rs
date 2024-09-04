@@ -7,7 +7,7 @@ use age_plugin::{
 use std::collections::{HashMap, HashSet};
 use std::io;
 
-use crate::{fl, key, piv_p256, Recipient, PLUGIN_NAME};
+use crate::{fl, key, Recipient, RecipientLine, PLUGIN_NAME};
 
 pub(crate) struct Handler;
 
@@ -271,24 +271,25 @@ impl IdentityPluginV1 for IdentityPlugin {
     }
 }
 
-enum SupportedStanza {
-    PivP256(piv_p256::RecipientLine),
-}
+struct SupportedStanza(RecipientLine);
 
 impl SupportedStanza {
     fn parse(stanza: Stanza) -> Option<Result<Self, ()>> {
-        piv_p256::RecipientLine::from_stanza(&stanza).map(|res| res.map(Self::PivP256))
+        match RecipientLine::from_stanza(&stanza) {
+            Some(Ok(line)) => Some(Ok(Self(line))),
+            _ => None,
+        }
     }
 
     pub(crate) fn matches_stub(&self, stub: &key::Stub) -> bool {
         match self {
-            SupportedStanza::PivP256(line) => stub.tag == line.tag,
+            SupportedStanza(line) => stub.tag == line.tag,
         }
     }
 
     pub(crate) fn unwrap_file_key(&self, conn: &mut key::Connection) -> Result<FileKey, ()> {
         match self {
-            SupportedStanza::PivP256(line) => line.unwrap_file_key(conn),
+            SupportedStanza(line) => line.unwrap_file_key(conn),
         }
     }
 }

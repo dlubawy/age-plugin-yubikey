@@ -1,8 +1,11 @@
+use std::time::SystemTime;
+
 use dialoguer::Password;
-use rand::{rngs::OsRng, RngCore};
-use x509::RelativeDistinguishedName;
+use rand_core::{OsRng, TryRngCore};
+use spki::{der::referenced::OwnedToRef, SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
+use x509_cert::{certificate::Rfc5280, serial_number::SerialNumber, time::Validity};
 use yubikey::{
-    certificate::Certificate,
+    certificate::{CertInfo, Certificate},
     piv::{generate as yubikey_generate, AlgorithmId, RetiredSlotId, SlotId},
     Key, PinPolicy, TouchPolicy, YubiKey,
 };
@@ -11,15 +14,16 @@ use crate::{
     error::Error,
     fl,
     key::{self, Stub},
-    piv_p256,
-    util::{Metadata, POLICY_EXTENSION_OID},
+    util::{Metadata, UsagePolicies},
     Recipient, BINARY_NAME, USABLE_SLOTS,
 };
 
+pub(crate) const DEFAULT_ALGORITHM: AlgorithmId = AlgorithmId::EccP256;
 pub(crate) const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
 pub(crate) const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
 
 pub(crate) struct IdentityBuilder {
+    algorithm: Option<AlgorithmId>,
     slot: Option<RetiredSlotId>,
     force: bool,
     name: Option<String>,
@@ -28,8 +32,9 @@ pub(crate) struct IdentityBuilder {
 }
 
 impl IdentityBuilder {
-    pub(crate) fn new(slot: Option<RetiredSlotId>) -> Self {
+    pub(crate) fn new(algorithm: Option<AlgorithmId>, slot: Option<RetiredSlotId>) -> Self {
         IdentityBuilder {
+            algorithm,
             slot,
             name: None,
             pin_policy: None,
@@ -59,6 +64,7 @@ impl IdentityBuilder {
     }
 
     pub(crate) fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
+        let algorithm = self.algorithm.unwrap_or(DEFAULT_ALGORITHM);
         let slot = match self.slot {
             Some(slot) => {
                 if !self.force {
@@ -85,8 +91,10 @@ impl IdentityBuilder {
             }
         };
 
-        let pin_policy = self.pin_policy.unwrap_or(DEFAULT_PIN_POLICY);
-        let touch_policy = self.touch_policy.unwrap_or(DEFAULT_TOUCH_POLICY);
+        let policies = UsagePolicies {
+            pin: self.pin_policy.unwrap_or(DEFAULT_PIN_POLICY),
+            touch: self.touch_policy.unwrap_or(DEFAULT_TOUCH_POLICY),
+        };
 
         eprintln!("{}", fl!("builder-gen-key"));
 
@@ -99,28 +107,39 @@ impl IdentityBuilder {
         let generated = yubikey_generate(
             yubikey,
             SlotId::Retired(slot),
-            AlgorithmId::EccP256,
-            pin_policy,
-            touch_policy,
+            algorithm,
+            policies.pin,
+            policies.touch,
         )?;
+        let generated_ref: SubjectPublicKeyInfoRef =
+            SubjectPublicKeyInfoOwned::owned_to_ref(&generated);
 
-        let recipient = Recipient::PivP256(
-            piv_p256::Recipient::from_spki(&generated).expect("YubiKey generates a valid pubkey"),
-        );
+        // TODO: https://github.com/RustCrypto/formats/issues/1488
+        // Document `OwnedToRef` usage in top-level docs somewhere (either of the
+        // crate, or of `SubjectPublicKeyInfoOwned` so we know how to get a reference).
+        let recipient =
+            Recipient::from_spki(generated_ref).expect("YubiKey generates a valid pubkey");
         let stub = Stub::new(yubikey.serial(), slot, &recipient);
 
         eprintln!();
         eprintln!("{}", fl!("builder-gen-cert"));
 
         // Pick a random serial for the new self-signed certificate.
-        let mut serial = [0; 20];
-        OsRng.fill_bytes(&mut serial);
+        let serial = {
+            // TODO: https://github.com/RustCrypto/formats/pull/1270
+            // adds `SerialNumber::generate`; use it when available.
+            let mut serial = [0; 20];
+            OsRng
+                .try_fill_bytes(&mut serial)
+                .expect("serial of proper length");
+            SerialNumber::new(&serial).expect("valid")
+        };
 
         let name = self
             .name
             .unwrap_or(format!("age identity {}", hex::encode(stub.tag)));
 
-        if let PinPolicy::Always = pin_policy {
+        if let PinPolicy::Always = policies.pin {
             // We need to enter the PIN again.
             let pin = Password::new()
                 .with_prompt(fl!(
@@ -131,35 +150,59 @@ impl IdentityBuilder {
                 .interact()?;
             yubikey.verify_pin(pin.as_bytes())?;
         }
-        if let TouchPolicy::Never = touch_policy {
+        if let TouchPolicy::Never = policies.touch {
             // No need to touch YubiKey
         } else {
             eprintln!("{}", fl!("builder-touch-yk"));
         }
 
-        let cert = Certificate::generate_self_signed(
-            yubikey,
-            SlotId::Retired(slot),
-            serial,
-            None,
-            &[
-                RelativeDistinguishedName::organization(BINARY_NAME),
-                RelativeDistinguishedName::organizational_unit(env!("CARGO_PKG_VERSION")),
-                RelativeDistinguishedName::common_name(&name),
-            ],
-            generated,
-            &[x509::Extension::regular(
-                POLICY_EXTENSION_OID,
-                &[pin_policy.into(), touch_policy.into()],
-            )],
-        )?;
+        // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
+        match algorithm {
+            AlgorithmId::X25519 => {
+                let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
+                let cert = Certificate::from_bytes(buf)?;
+                let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
 
-        let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+                let metadata = Metadata::extract(yubikey, slot, &cert, true).unwrap();
 
-        Ok((
-            Stub::new(yubikey.serial(), slot, &recipient),
-            recipient,
-            metadata,
-        ))
+                Ok((
+                    Stub::new(yubikey.serial(), slot, &recipient),
+                    recipient,
+                    metadata,
+                ))
+            }
+            _ => {
+                let cert = Certificate::generate_self_signed::<_, p256::NistP256>(
+                    yubikey,
+                    SlotId::Retired(slot),
+                    serial,
+                    Validity::<Rfc5280>::new(
+                        SystemTime::now().try_into().map_err(Error::Build)?,
+                        x509_cert::time::Time::INFINITY,
+                    ),
+                    // TODO: https://github.com/RustCrypto/formats/issues/1489
+                    format!("O={BINARY_NAME},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
+                        .parse()
+                        .map_err(Error::Build)?,
+                    generated,
+                    // TODO: https://github.com/RustCrypto/formats/issues/1490
+                    // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/580
+                    |builder| {
+                        builder.add_extension(&policies).map_err(|e| match e {
+                            x509_cert::builder::Error::Asn1(error) => error,
+                            e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
+                        })
+                    },
+                )?;
+
+                let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+
+                Ok((
+                    Stub::new(yubikey.serial(), slot, &recipient),
+                    recipient,
+                    metadata,
+                ))
+            }
+        }
     }
 }

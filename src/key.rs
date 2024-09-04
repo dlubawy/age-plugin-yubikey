@@ -1,10 +1,16 @@
 //! Structs for handling YubiKeys.
 
-use age_core::secrecy::{ExposeSecret, SecretString};
+use age_core::{
+    format::{FileKey, FILE_KEY_BYTES},
+    primitives::{aead_decrypt, hkdf},
+    secrecy::{ExposeSecret, SecretString},
+};
 use age_plugin::{identity, Callbacks};
 use bech32::{ToBase32, Variant};
 use dialoguer::Password;
 use log::{debug, error, warn};
+use rand_core::OsRng;
+use spki::der::zeroize::Zeroize;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
@@ -20,10 +26,10 @@ use yubikey::{
 
 use crate::{
     error::Error,
-    fl, piv_p256,
+    fl,
     recipient::TAG_BYTES,
     util::{otp_serial_prefix, Metadata},
-    Recipient, IDENTITY_PREFIX,
+    Recipient, RecipientLine, IDENTITY_PREFIX,
 };
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
@@ -350,7 +356,7 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
     }
 
     match MgmKey::get_protected(yubikey) {
-        Ok(mgm_key) => yubikey.authenticate(mgm_key).map_err(|e| match e {
+        Ok(mgm_key) => yubikey.authenticate(&mgm_key).map_err(|e| match e {
             yubikey::Error::AuthenticationError => Error::ManagementKeyAuth,
             _ => e.into(),
         })?,
@@ -358,11 +364,11 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
         _ => {
             // Try to authenticate with the default management key.
             yubikey
-                .authenticate(MgmKey::default())
+                .authenticate(&MgmKey::get_default(&yubikey).unwrap())
                 .map_err(|_| Error::CustomManagementKey)?;
 
             // Migrate to a PIN-protected management key.
-            let mgm_key = MgmKey::generate();
+            let mgm_key = MgmKey::generate_for(&yubikey, &mut OsRng).unwrap();
             eprintln!();
             eprintln!("{}", fl!("mgr-changing-mgmt-key"));
             eprint!("... ");
@@ -393,8 +399,7 @@ pub(crate) fn list_slots(
         match key.slot() {
             SlotId::Retired(slot) => {
                 // Only P-256 keys are compatible with us.
-                let recipient = piv_p256::Recipient::from_certificate(key.certificate())
-                    .map(Recipient::PivP256);
+                let recipient = Recipient::from_certificate(key.certificate());
                 Some((key, slot, recipient))
             }
             _ => None,
@@ -597,9 +602,9 @@ impl Stub {
         let (cert, pk) = match Certificate::read(&mut yubikey, SlotId::Retired(self.slot))
             .ok()
             .and_then(|cert| {
-                piv_p256::Recipient::from_certificate(&cert)
-                    .filter(|pk| pk.tag() == self.tag)
-                    .map(|pk| (cert, Recipient::PivP256(pk)))
+                Recipient::from_certificate(&cert)
+                    .filter(|pk| pk.static_tag() == self.tag)
+                    .map(|pk| (cert, pk))
             }) {
             Some(pk) => pk,
             None => {
@@ -615,6 +620,7 @@ impl Stub {
             cert,
             pk,
             slot: self.slot,
+            tag: self.tag,
             identity_index: self.identity_index,
             cached_metadata: None,
             last_touch: None,
@@ -627,6 +633,7 @@ pub(crate) struct Connection {
     cert: Certificate,
     pk: Recipient,
     slot: RetiredSlotId,
+    tag: [u8; 4],
     identity_index: usize,
     cached_metadata: Option<Metadata>,
     last_touch: Option<Instant>,
@@ -695,10 +702,10 @@ impl Connection {
         Ok(Ok(()))
     }
 
-    pub(crate) fn p256_ecdh(&mut self, epk_bytes: &[u8]) -> Result<yubikey::Buffer, ()> {
-        // The YubiKey API for performing scalar multiplication takes the point in its
-        // uncompressed SEC-1 encoding.
-        assert_eq!(epk_bytes.len(), 65);
+    pub(crate) fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
+        assert_eq!(self.tag, line.tag);
+
+        let algorithm = line.epk_bytes.algorithm();
 
         // Check if the touch policy requires a touch.
         let needs_touch = match (
@@ -710,10 +717,16 @@ impl Connection {
             _ => false,
         };
 
+        let epk_bytes = match line.epk_bytes.public_key().decompress() {
+            Some(pk) => pk.as_bytes().to_owned(),
+            None => line.epk_bytes.as_bytes().to_vec(),
+        };
+        // The YubiKey API for performing scalar multiplication takes the point in its
+        // uncompressed SEC-1 encoding.
         let shared_secret = match decrypt_data(
             &mut self.yubikey,
-            epk_bytes,
-            AlgorithmId::EccP256,
+            &epk_bytes,
+            algorithm,
             SlotId::Retired(self.slot),
         ) {
             Ok(res) => res,
@@ -729,7 +742,33 @@ impl Connection {
             }
         }
 
-        Ok(shared_secret)
+        let pk_bytes = match self.pk.to_encoded() {
+            Some(pk_bytes) => pk_bytes,
+            None => self.pk.as_bytes().to_vec(),
+        };
+        let mut salt = vec![];
+        salt.extend_from_slice(line.epk_bytes.as_bytes());
+        salt.extend_from_slice(&pk_bytes);
+
+        let enc_key = match algorithm {
+            AlgorithmId::X25519 => hkdf(
+                &salt,
+                crate::x25519::STANZA_KEY_LABEL,
+                shared_secret.as_ref(),
+            ),
+            _ => hkdf(&salt, crate::p256::STANZA_KEY_LABEL, shared_secret.as_ref()),
+        };
+
+        // A failure to decrypt is fatal, because we assume that we won't
+        // encounter 32-bit collisions on the key tag embedded in the header.
+        aead_decrypt(&enc_key, FILE_KEY_BYTES, &line.encrypted_file_key)
+            .map_err(|_| ())
+            .map(|mut pt| {
+                FileKey::init_with_mut(|file_key| {
+                    file_key.copy_from_slice(&pt);
+                    pt.zeroize();
+                })
+            })
     }
 
     /// Close this connection without resetting the YubiKey.
