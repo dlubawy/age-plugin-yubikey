@@ -433,7 +433,10 @@ fn main() -> Result<(), Error> {
                             let cert = &key.certificate().cert;
                             let (name, _) = util::extract_name(cert, true).unwrap();
                             let created = chrono::DateTime::<chrono::Utc>::from(
-                                cert.tbs_certificate.validity.not_before.to_system_time(),
+                                cert.tbs_certificate()
+                                    .validity()
+                                    .not_before
+                                    .to_system_time(),
                             )
                             .to_rfc2822();
 

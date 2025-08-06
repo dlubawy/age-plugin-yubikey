@@ -15,8 +15,9 @@ use std::io;
 use std::iter;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
+use x509_cert::spki::{ObjectIdentifier, SubjectPublicKeyInfoRef};
 use yubikey::{
-    certificate::{Certificate, PublicKeyInfo},
+    certificate::Certificate,
     piv::{decrypt_data, AlgorithmId, RetiredSlotId, SlotId},
     reader::{Context, Reader},
     Key, MgmKey, PinPolicy, Serial, TouchPolicy, YubiKey,
@@ -33,6 +34,9 @@ use crate::{
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const FIFTEEN_SECONDS: Duration = Duration::from_secs(15);
 const TAG_BYTES: usize = 4;
+
+pub const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+pub const OID_X25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.110");
 
 #[derive(Clone)]
 pub(crate) enum YubikeyRecipient {
@@ -72,23 +76,19 @@ impl YubikeyRecipient {
             }
         }
     }
-    pub(crate) fn from_spki(spki: &PublicKeyInfo) -> Option<Self> {
-        match spki.algorithm() {
-            AlgorithmId::EccP256 => {
-                crate::p256::Recipient::from_spki(spki).map(YubikeyRecipient::EccP256)
-            }
-            AlgorithmId::X25519 => {
-                crate::x25519::Recipient::from_spki(spki).map(YubikeyRecipient::X25519)
-            }
+    pub(crate) fn from_spki(spki: SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
+        match spki.algorithm.oid {
+            OID_P256 => crate::p256::Recipient::from_spki(spki).map(YubikeyRecipient::EccP256),
+            OID_X25519 => crate::x25519::Recipient::from_spki(&spki).map(YubikeyRecipient::X25519),
             _ => None,
         }
     }
     fn from_certificate(cert: &Certificate) -> Option<Self> {
-        match cert.subject_pki().algorithm() {
-            AlgorithmId::EccP256 => {
+        match cert.subject_pki().algorithm.oid {
+            OID_P256 => {
                 crate::p256::Recipient::from_certificate(cert).map(YubikeyRecipient::EccP256)
             }
-            AlgorithmId::X25519 => {
+            OID_X25519 => {
                 crate::x25519::Recipient::from_certificate(cert).map(YubikeyRecipient::X25519)
             }
             _ => None,

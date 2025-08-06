@@ -1,7 +1,7 @@
 use std::fmt;
 use std::iter;
 
-use pkcs8::AssociatedOid;
+use const_oid::{AssociatedOid, ObjectIdentifier};
 use x509_cert::{
     der::{
         self,
@@ -9,7 +9,6 @@ use x509_cert::{
         Decode,
     },
     ext::AsExtension,
-    spki::ObjectIdentifier,
 };
 use yubikey::{
     piv::{AlgorithmId, RetiredSlotId, SlotId},
@@ -57,6 +56,8 @@ impl der::Encode for UsagePolicies {
 }
 
 impl<'a> der::Decode<'a> for UsagePolicies {
+    type Error = der::Error;
+
     fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
         // TODO: https://github.com/RustCrypto/formats/issues/1492
         let pin = decoder
@@ -138,8 +139,8 @@ pub(crate) fn otp_serial_prefix(serial: Serial) -> String {
 pub(crate) fn extract_name(cert: &x509_cert::Certificate, all: bool) -> Option<(String, bool)> {
     // Look at Subject Organization to determine if we created this.
     match cert
-        .tbs_certificate
-        .subject
+        .tbs_certificate()
+        .subject()
         // TODO: https://github.com/RustCrypto/formats/issues/1493
         // Replicate `iter_organization` from `x509-parser`, or figure out some
         // other way to reliably access common / predictable parts of a subject. Could
@@ -152,8 +153,8 @@ pub(crate) fn extract_name(cert: &x509_cert::Certificate, all: bool) -> Option<(
         Some(org) if org.value.decode_as::<String>().as_deref() == Ok(BINARY_NAME) => {
             // We store the identity name as a Common Name attribute.
             let name = cert
-                .tbs_certificate
-                .subject
+                .tbs_certificate()
+                .subject()
                 // TODO: https://github.com/RustCrypto/formats/issues/1493
                 .as_ref()
                 .iter()
@@ -171,7 +172,7 @@ pub(crate) fn extract_name(cert: &x509_cert::Certificate, all: bool) -> Option<(
             }
 
             // Display the entire subject.
-            let name = cert.tbs_certificate.subject.to_string();
+            let name = cert.tbs_certificate().subject().to_string();
 
             Some((name, false))
         }
@@ -198,9 +199,9 @@ impl Metadata {
         // using the same certificate extension as PIV attestations.
         // https://developers.yubico.com/PIV/Introduction/PIV_attestation.html
         let policies = |c: &x509_cert::Certificate| {
-            c.tbs_certificate
+            c.tbs_certificate()
                 // TODO: https://github.com/RustCrypto/formats/issues/1491
-                .get::<UsagePolicies>()
+                .get_extension::<UsagePolicies>()
                 .ok()
                 .flatten()
                 .map(|(_critical, policies)| {
@@ -247,8 +248,8 @@ impl Metadata {
                 name,
                 created: chrono::DateTime::<chrono::Utc>::from(
                     cert.cert
-                        .tbs_certificate
-                        .validity
+                        .tbs_certificate()
+                        .validity()
                         .not_before
                         .to_system_time(),
                 )

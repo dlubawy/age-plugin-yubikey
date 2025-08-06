@@ -5,7 +5,7 @@ use age_core::{
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
 use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use sha2::Sha256;
 use yubikey::piv::AlgorithmId;
 
@@ -195,7 +195,8 @@ impl RecipientLine {
     pub(crate) fn wrap_file_key(file_key: &FileKey, recipient: &YubikeyRecipient) -> Self {
         match recipient {
             YubikeyRecipient::EccP256(pk) => {
-                let esk = ::p256::ecdh::EphemeralSecret::random(&mut OsRng);
+                let esk =
+                    ::p256::ecdh::EphemeralSecret::try_from_rng(&mut OsRng).expect("random key");
                 let epk = esk.public_key().to_encoded_point(true);
                 let epk_bytes = EphemeralKeyBytes::from_public_key(PublicKey::EccP256(epk.into()));
 
@@ -227,7 +228,7 @@ impl RecipientLine {
                 }
             }
             YubikeyRecipient::X25519(pk) => {
-                let esk = x25519_dalek::EphemeralSecret::random_from_rng(&mut OsRng);
+                let esk = x25519_dalek::EphemeralSecret::random();
                 let epk = x25519_dalek::PublicKey::from(&esk);
                 let epk_bytes = EphemeralKeyBytes::from_public_key(PublicKey::X25519(epk));
 
