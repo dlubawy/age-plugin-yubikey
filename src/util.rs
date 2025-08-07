@@ -5,7 +5,7 @@ use const_oid::{AssociatedOid, ObjectIdentifier};
 use x509_cert::{
     der::{
         self,
-        oid::db::rfc4519::{COMMON_NAME, ORGANIZATION},
+        oid::db::rfc4519::{COMMON_NAME, ORGANIZATION_NAME},
         Decode,
     },
     ext::AsExtension,
@@ -147,7 +147,7 @@ pub(crate) fn extract_name(cert: &x509_cert::Certificate, all: bool) -> Option<(
         // maybe gate a getter on a concrete `Profile` (or on a sub-trait)?
         .as_ref()
         .iter()
-        .flat_map(|n| n.as_ref().iter().find(|a| a.oid == ORGANIZATION))
+        .flat_map(|n| n.as_ref().iter().find(|a| a.oid == ORGANIZATION_NAME))
         .next()
     {
         Some(org) if org.value.decode_as::<String>().as_deref() == Ok(BINARY_NAME) => {
