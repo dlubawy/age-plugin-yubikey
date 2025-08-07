@@ -38,7 +38,7 @@ pcsc = "2.4"
 sha2 = "0.11.0-rc.0"
 which = "5"
 x509-cert = "0.3.0-rc.1"
-yubikey = { git = "https://github.com/dlubawy/yubikey.rs", branch = "rebase/curve_25519", features = ["untested"] }
+yubikey = { git = "https://github.com/dlubawy/yubikey.rs", branch = "curve_25519", features = ["untested"] }
 pkcs8 = "0.10"
 curve25519-dalek = "5.0.0-pre.0"
 x25519-dalek = { version = "3.0.0-pre.0", features = ["os_rng"]}
