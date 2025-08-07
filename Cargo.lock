@@ -3426,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "yubikey"
 version = "0.8.0"
-source = "git+file:///Users/drew/Desktop/yubikey.rs?branch=rebase/curve_25519#c28242f0e8ab2b055c53df6984be05771d0eed11"
+source = "git+https://github.com/dlubawy/yubikey.rs?branch=rebase/curve_25519#c28242f0e8ab2b055c53df6984be05771d0eed11"
 dependencies = [
  "base16ct",
  "bitflags 2.9.1",
