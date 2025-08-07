@@ -132,7 +132,9 @@ impl IdentityBuilder {
             // TODO: https://github.com/RustCrypto/formats/pull/1270
             // adds `SerialNumber::generate`; use it when available.
             let mut serial = [0; 20];
-            OsRng::try_fill_bytes(&mut OsRng, &mut serial).expect("serial of proper length");
+            OsRng
+                .try_fill_bytes(&mut serial)
+                .expect("serial of proper length");
             SerialNumber::new(&serial).expect("valid")
         };
 

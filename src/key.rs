@@ -35,7 +35,7 @@ const ONE_SECOND: Duration = Duration::from_secs(1);
 const FIFTEEN_SECONDS: Duration = Duration::from_secs(15);
 const TAG_BYTES: usize = 4;
 
-pub const OID_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
+pub const OID_P256: ObjectIdentifier = p256::elliptic_curve::ALGORITHM_OID;
 pub const OID_X25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.110");
 
 #[derive(Clone)]
