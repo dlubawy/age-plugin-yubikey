@@ -33,12 +33,12 @@ env_logger = "0.10"
 gumdrop = "0.8"
 hex = "0.4"
 log = "0.4"
-p256 = { version = "=0.14.0-pre.9", features = ["ecdh", "pkcs8"] }
+p256 = { version = "=0.14.0-pre.11", features = ["ecdh", "pkcs8"] }
 pcsc = "2.4"
 sha2 = "0.11.0-rc.0"
 which = "5"
-x509-cert = "0.3.0-rc.1"
-yubikey = { git = "https://github.com/dlubawy/yubikey.rs", branch = "curve_25519", features = ["untested"] }
+x509-cert = "0.3.0-rc.2"
+yubikey = { git = "https://github.com/dlubawy/yubikey.rs", branch = "curve_25519", features = ["untested"], version = "0.8.0" }
 pkcs8 = "0.10"
 curve25519-dalek = "5.0.0-pre.0"
 x25519-dalek = { version = "3.0.0-pre.0", features = ["os_rng"]}

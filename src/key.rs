@@ -9,6 +9,7 @@ use age_plugin::{identity, Callbacks};
 use bech32::{ToBase32, Variant};
 use dialoguer::Password;
 use log::{debug, error, warn};
+use rand_core::OsRng;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
@@ -438,7 +439,7 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
     }
 
     match MgmKey::get_protected(yubikey) {
-        Ok(mgm_key) => yubikey.authenticate(mgm_key).map_err(|e| match e {
+        Ok(mgm_key) => yubikey.authenticate(&mgm_key).map_err(|e| match e {
             yubikey::Error::AuthenticationError => Error::ManagementKeyAuth,
             _ => e.into(),
         })?,
@@ -446,11 +447,11 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
         _ => {
             // Try to authenticate with the default management key.
             yubikey
-                .authenticate(MgmKey::default())
+                .authenticate(&MgmKey::get_default(&yubikey).unwrap())
                 .map_err(|_| Error::CustomManagementKey)?;
 
             // Migrate to a PIN-protected management key.
-            let mgm_key = MgmKey::generate();
+            let mgm_key = MgmKey::generate_for(&yubikey, &mut OsRng).unwrap();
             eprintln!();
             eprintln!("{}", fl!("mgr-changing-mgmt-key"));
             eprint!("... ");
