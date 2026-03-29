@@ -40,9 +40,7 @@ which = "5"
 x509-cert = "0.3.0-rc.2"
 yubikey = { git = "https://github.com/iqlusioninc/yubikey.rs", rev = "872ba35f5453b0bec611b468102c61c123768965", features = ["untested"], version = "0.8.0" }
 pkcs8 = "0.10"
-curve25519-dalek = "5.0.0-pre.0"
 x25519-dalek = { version = "3.0.0-pre.0", features = ["os_rng"]}
-ed25519-dalek = "3.0.0-pre.0"
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 spki = { version = "0.8.0-rc.4", features = ["alloc"] }
 
