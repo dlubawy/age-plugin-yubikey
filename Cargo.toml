@@ -9,7 +9,7 @@ keywords = ["age", "cli", "encryption", "yubikey"]
 categories = ["command-line-utilities", "cryptography"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.70" # MSRV
+rust-version = "1.74" # MSRV
 
 [package.metadata.deb]
 extended-description = """\
@@ -43,6 +43,7 @@ pkcs8 = "0.10"
 x25519-dalek = { version = "3.0.0-pre.0", features = ["os_rng"]}
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 spki = { version = "0.8.0-rc.4", features = ["alloc"] }
+hpke = "0.13.0"
 
 # Translations
 i18n-embed = { version = "0.15", features = ["desktop-requester", "fluent-system"] }
@@ -53,6 +54,8 @@ rust-embed = "8"
 # GnuPG coexistence
 sysinfo = "0.29"
 const-oid = "0.10.1"
+typenum = {version = "1.19.0", features = ["i128"]}
+sha3 = {version = "0.10.8", features = ["std"]}
 
 [dev-dependencies]
 flate2 = "1"
@@ -60,3 +63,7 @@ man = "0.3"
 tempfile = "3"
 test-with = "0.11"
 which = "5"
+
+[patch.crates-io]
+age-core = { git = "https://github.com/str4d/rage.git", rev = "cf04ea79ab74f4fdbfbe5b4ed7d0fb72c9c1da4d" }
+age-plugin = { git = "https://github.com/str4d/rage.git", rev = "cf04ea79ab74f4fdbfbe5b4ed7d0fb72c9c1da4d" }
