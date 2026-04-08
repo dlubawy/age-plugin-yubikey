@@ -9,7 +9,7 @@ use age_plugin::{identity, Callbacks};
 use bech32::{ToBase32, Variant};
 use dialoguer::Password;
 use log::{debug, error, warn};
-use rand_core::OsRng;
+use rand::rngs::SysRng;
 use spki::der::zeroize::Zeroize;
 use std::convert::Infallible;
 use std::fmt;
@@ -368,7 +368,7 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
                 .map_err(|_| Error::CustomManagementKey)?;
 
             // Migrate to a PIN-protected management key.
-            let mgm_key = MgmKey::generate_for(&yubikey, &mut OsRng).unwrap();
+            let mgm_key = MgmKey::generate_for(&yubikey, &mut SysRng).unwrap();
             eprintln!();
             eprintln!("{}", fl!("mgr-changing-mgmt-key"));
             eprint!("... ");

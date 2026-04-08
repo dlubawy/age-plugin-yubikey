@@ -6,10 +6,11 @@ use const_oid::{AssociatedOid, ObjectIdentifier};
 use x509_cert::{
     der::{
         self,
+        asn1::OctetString,
         oid::db::rfc4519::{COMMON_NAME, ORGANIZATION_NAME},
         Decode,
     },
-    ext::AsExtension,
+    ext::{Criticality, ToExtension},
 };
 use yubikey::{
     piv::{AlgorithmId, RetiredSlotId, SlotId},
@@ -73,13 +74,29 @@ impl<'a> der::Decode<'a> for UsagePolicies {
     }
 }
 
-impl AsExtension for UsagePolicies {
-    fn critical(
+impl ToExtension for UsagePolicies {
+    type Error = der::Error;
+    fn to_extension(
+        self,
+        _subject: &x509_cert::name::Name,
+        _extensions: &[x509_cert::ext::Extension],
+    ) -> Result<x509_cert::ext::Extension, Self::Error> {
+        // TODO: https://github.com/RustCrypto/formats/issues/1490
+        let extn_value: &[u8; 21] = b"1.3.6.1.4.1.41482.3.8";
+        Ok(x509_cert::ext::Extension {
+            extn_id: POLICY_EXTENSION_OID,
+            critical: false,
+            extn_value: OctetString::new(*extn_value)?,
+        })
+    }
+}
+
+impl Criticality for UsagePolicies {
+    fn criticality(
         &self,
         _subject: &x509_cert::name::Name,
         _extensions: &[x509_cert::ext::Extension],
     ) -> bool {
-        // TODO: https://github.com/RustCrypto/formats/issues/1490
         false
     }
 }

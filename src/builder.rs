@@ -1,7 +1,7 @@
 use std::time::SystemTime;
 
 use dialoguer::Password;
-use rand_core::{OsRng, TryRngCore};
+use rand::{rngs::SysRng, TryRng};
 use spki::{der::referenced::OwnedToRef, SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
 use x509_cert::{certificate::Rfc5280, serial_number::SerialNumber, time::Validity};
 use yubikey::{
@@ -129,7 +129,7 @@ impl IdentityBuilder {
             // TODO: https://github.com/RustCrypto/formats/pull/1270
             // adds `SerialNumber::generate`; use it when available.
             let mut serial = [0; 20];
-            OsRng
+            SysRng
                 .try_fill_bytes(&mut serial)
                 .expect("serial of proper length");
             SerialNumber::new(&serial).expect("valid")
@@ -189,7 +189,6 @@ impl IdentityBuilder {
                     // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/580
                     |builder| {
                         builder.add_extension(&policies).map_err(|e| match e {
-                            x509_cert::builder::Error::Asn1(error) => error,
                             e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
                         })
                     },

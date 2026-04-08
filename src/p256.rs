@@ -1,11 +1,14 @@
 use age_core::{format::FileKey, primitives::aead_encrypt, secrecy::ExposeSecret};
 use bech32::{ToBase32, Variant};
 use p256::{
-    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+    elliptic_curve::{
+        common::Generate,
+        sec1::{FromSec1Point, ToSec1Point},
+    },
     pkcs8::SubjectPublicKeyInfoRef,
-    EncodedPoint,
+    Sec1Point,
 };
-use rand_core::OsRng;
+use rand::rngs::SysRng;
 use sha2::Sha256;
 use x509_cert::spki::ObjectIdentifier;
 use yubikey::Certificate;
@@ -23,14 +26,14 @@ pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-p256";
 pub(crate) const OID_P256: ObjectIdentifier = p256::elliptic_curve::ALGORITHM_OID;
 
 #[derive(Clone, Debug)]
-pub struct PublicKey(EncodedPoint);
+pub struct PublicKey(Sec1Point);
 
 impl PublicKey {
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let key_bytes: [u8; EPK_BYTES] = bytes.try_into().unwrap();
-        let encoded = EncodedPoint::from_bytes(key_bytes).ok()?;
+        let encoded = Sec1Point::from_bytes(key_bytes).ok()?;
         if encoded.is_compressed()
-            && ::p256::PublicKey::from_encoded_point(&encoded)
+            && ::p256::PublicKey::from_sec1_point(&encoded)
                 .is_some()
                 .into()
         {
@@ -41,8 +44,8 @@ impl PublicKey {
     }
 
     pub(crate) fn decompress(&self) -> Option<Self> {
-        let p = ::p256::PublicKey::from_encoded_point(&self.0).unwrap();
-        Some(Self(p.to_encoded_point(false)))
+        let p = ::p256::PublicKey::from_sec1_point(&self.0).unwrap();
+        Some(Self(p.to_sec1_point(false)))
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -77,7 +80,7 @@ impl fmt::Display for Recipient {
 impl Recipient {
     /// Attempts to parse a valid YubiKey recipient from its compressed SEC-1 byte encoding.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let encoded = EncodedPoint::from_bytes(bytes).ok()?;
+        let encoded = Sec1Point::from_bytes(bytes).ok()?;
         if encoded.is_compressed() {
             Self::from_encoded(&encoded)
         } else {
@@ -98,13 +101,13 @@ impl Recipient {
     ///
     /// This accepts both compressed (as used by the plugin) and uncompressed (as used in
     /// the YubiKey certificate) encodings.
-    fn from_encoded(encoded: &EncodedPoint) -> Option<Self> {
-        Option::from(::p256::PublicKey::from_encoded_point(encoded)).map(Recipient)
+    fn from_encoded(encoded: &Sec1Point) -> Option<Self> {
+        Option::from(::p256::PublicKey::from_sec1_point(encoded)).map(Recipient)
     }
 
     /// Returns the compressed SEC-1 encoding of this recipient.
-    pub(crate) fn to_encoded(&self) -> EncodedPoint {
-        self.0.to_encoded_point(true)
+    pub(crate) fn to_encoded(&self) -> Sec1Point {
+        self.0.to_sec1_point(true)
     }
 
     pub(crate) fn tag(&self) -> [u8; TAG_BYTES] {
@@ -117,8 +120,9 @@ impl Recipient {
     }
 
     pub(crate) fn wrap_file_key(&self, file_key: &FileKey) -> RecipientLine {
-        let esk = ::p256::ecdh::EphemeralSecret::try_from_rng(&mut OsRng).expect("random key");
-        let epk = esk.public_key().to_encoded_point(true);
+        let esk =
+            ::p256::ecdh::EphemeralSecret::try_generate_from_rng(&mut SysRng).expect("random key");
+        let epk = esk.public_key().to_sec1_point(true);
         let epk_bytes = EphemeralKeyBytes::from_public_key(crate::recipient::PublicKey::EccP256(
             PublicKey(epk.into()),
         ));

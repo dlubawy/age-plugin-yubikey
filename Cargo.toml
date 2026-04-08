@@ -33,17 +33,17 @@ env_logger = "0.10"
 gumdrop = "0.8"
 hex = "0.4"
 log = "0.4"
-p256 = { version = "=0.14.0-pre.11", features = ["ecdh", "pkcs8"] }
+p256 = { version = "0.14.0-pre.11", features = ["ecdh", "pkcs8"] }
 pcsc = "2.4"
 sha2 = "0.11.0-rc.0"
 which = "5"
 x509-cert = "0.3.0-rc.2"
-yubikey = { git = "https://github.com/iqlusioninc/yubikey.rs", rev = "872ba35f5453b0bec611b468102c61c123768965", features = ["untested"], version = "0.8.0" }
+yubikey = {  features = ["untested"], version = "=0.9.0-pre.0" }
 pkcs8 = "0.10"
-x25519-dalek = { version = "3.0.0-pre.0", features = ["os_rng"]}
+x25519-dalek = { version = "3.0.0-pre.6", features = ["static_secrets", "getrandom"]}
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 spki = { version = "0.8.0-rc.4", features = ["alloc"] }
-hpke = "0.13.0"
+hpke = {version = "=0.14.0-pre.1"}
 
 # Translations
 i18n-embed = { version = "0.15", features = ["desktop-requester", "fluent-system"] }
@@ -55,7 +55,9 @@ rust-embed = "8"
 sysinfo = "0.29"
 const-oid = "0.10.1"
 typenum = {version = "1.19.0", features = ["i128"]}
-sha3 = {version = "0.10.8", features = ["std"]}
+sha3 = {version = "0.11.0"}
+ml-kem = {version = "0.3.0-rc.2"}
+rand = "0.10.0"
 
 [dev-dependencies]
 flate2 = "1"
