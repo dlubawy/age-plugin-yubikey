@@ -27,8 +27,6 @@
 
 ## YubiKey metadata
 
-tag-piv-p256 = PivP256
-tag-piv-x25519 = PivX25519
 tag-kem-x25519 = KemX25519
 unknown-tag = Unknown
 

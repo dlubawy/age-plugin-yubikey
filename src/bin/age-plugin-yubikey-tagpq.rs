@@ -6,40 +6,15 @@ use std::io::{self, Write};
 use age_plugin::run_state_machine;
 use dialoguer::{Confirm, Input, Select};
 use gumdrop::Options;
-use i18n_embed::{
-    fluent::{fluent_language_loader, FluentLanguageLoader},
-    DesktopLanguageRequester,
-};
-use lazy_static::lazy_static;
-use rust_embed::RustEmbed;
-use yubikey::piv::AlgorithmId;
+use i18n_embed::DesktopLanguageRequester;
 use yubikey::{piv::RetiredSlotId, reader::Context, PinPolicy, Serial, TouchPolicy};
 
-use age_plugin_yubikey::builder::{Tag, DEFAULT_TAG};
+use age_plugin_yubikey::builder::Tag;
+use age_plugin_yubikey::error::Error;
 use age_plugin_yubikey::recipient::Recipient;
 use age_plugin_yubikey::*;
 
-use age_plugin_yubikey::error::Error;
-
-#[derive(RustEmbed)]
-#[folder = "i18n"]
-struct Translations;
-
-const TRANSLATIONS: Translations = Translations {};
-
-lazy_static! {
-    static ref LANGUAGE_LOADER: FluentLanguageLoader = fluent_language_loader!();
-}
-
-#[macro_export]
-macro_rules! fl {
-    ($message_id:literal) => {{
-        i18n_embed_fl::fl!($crate::LANGUAGE_LOADER, $message_id)
-    }};
-    ($message_id:literal, $($kwarg:expr),* $(,)*) => {{
-        i18n_embed_fl::fl!($crate::LANGUAGE_LOADER, $message_id, $($kwarg,)*)
-    }};
-}
+const DEFAULT_TAG: Tag = Tag::MlKem768X25519Tag;
 
 #[derive(Debug, Options)]
 struct PluginOptions {
@@ -64,12 +39,6 @@ struct PluginOptions {
         no_short
     )]
     tag: Option<String>,
-
-    #[options(
-        help = "Algorithm to generate the key with. Defaults to ECCP256.",
-        no_short
-    )]
-    algorithm: Option<String>,
 
     #[options(help = "Generate a new YubiKey identity.")]
     generate: bool,
@@ -116,7 +85,6 @@ struct PluginOptions {
 
 struct PluginFlags {
     tag: Option<Tag>,
-    algorithm: Option<AlgorithmId>,
     serial: Option<Serial>,
     slot: Option<RetiredSlotId>,
     name: Option<String>,
@@ -130,10 +98,6 @@ impl TryFrom<PluginOptions> for PluginFlags {
 
     fn try_from(opts: PluginOptions) -> Result<Self, Self::Error> {
         let tag = opts.tag.map(util::tag_from_string).transpose()?;
-        let algorithm = opts
-            .algorithm
-            .map(util::algorithm_from_string)
-            .transpose()?;
         let serial = opts.serial.map(|s| s.into());
         let slot = opts.slot.map(util::ui_to_slot).transpose()?;
         let pin_policy = opts
@@ -147,7 +111,6 @@ impl TryFrom<PluginOptions> for PluginFlags {
 
         Ok(PluginFlags {
             tag,
-            algorithm,
             serial,
             slot,
             name: opts.name,
@@ -161,13 +124,12 @@ impl TryFrom<PluginOptions> for PluginFlags {
 fn generate(flags: PluginFlags) -> Result<(), Error> {
     let mut yubikey = key::open(flags.serial)?;
 
-    let (stub, recipient, metadata) =
-        builder::IdentityBuilder::new(flags.tag, flags.algorithm, flags.slot)
-            .with_name(flags.name)
-            .with_pin_policy(flags.pin_policy)
-            .with_touch_policy(flags.touch_policy)
-            .force(flags.force)
-            .build(&mut yubikey)?;
+    let (stub, recipient, metadata) = builder::IdentityBuilder::new(flags.tag, None, flags.slot)
+        .with_name(flags.name)
+        .with_pin_policy(flags.pin_policy)
+        .with_touch_policy(flags.touch_policy)
+        .force(flags.force)
+        .build(&mut yubikey)?;
 
     util::print_identity(stub, recipient, metadata);
 
@@ -285,7 +247,7 @@ fn list(flags: PluginFlags, all: bool) -> Result<(), Error> {
         &fl!("printed-kind-recipients"),
         flags,
         all,
-        |_, recipient, metadata| {
+        |_, _recipient, metadata| {
             println!("{metadata}");
         },
     )
@@ -319,7 +281,7 @@ fn main() -> Result<(), Error> {
         run_state_machine(&state_machine, plugin::Handler)?;
         Ok(())
     } else if opts.version {
-        println!("age-plugin-yubikey {}", env!("CARGO_PKG_VERSION"));
+        println!("age-plugin-yubikey-tagpq {}", env!("CARGO_PKG_VERSION"));
         Ok(())
     } else if opts.generate {
         generate(opts.try_into()?)
@@ -339,20 +301,16 @@ fn main() -> Result<(), Error> {
             "{}",
             fl!(
                 "cli-setup-intro",
-                generate_usage = "age-plugin-yubikey --generate",
+                generate_usage = "age-plugin-yubikey-tagpq --generate",
             )
         );
         eprintln!();
 
         let tag = match Select::new()
             .with_prompt(fl!("cli-setup-tag"))
-            .items(&[
-                fl!("tag-piv-p256"),
-                fl!("tag-piv-x25519"),
-                fl!("tag-kem-x25519"),
-            ])
+            .items(&[fl!("tag-kem-x25519")])
             .default(
-                [Tag::PivP256, Tag::PivX25519, Tag::KemX25519]
+                [Tag::MlKem768X25519Tag]
                     .iter()
                     .position(|p| p == &flags.tag.unwrap_or(DEFAULT_TAG))
                     .unwrap(),
@@ -360,27 +318,7 @@ fn main() -> Result<(), Error> {
             .report(true)
             .interact_opt()?
         {
-            Some(0) => Tag::PivP256,
-            Some(1) => Tag::PivX25519,
-            Some(2) => Tag::KemX25519,
-            Some(_) => unreachable!(),
-            None => return Ok(()),
-        };
-
-        let algorithm = match Select::new()
-            .with_prompt(fl!("cli-setup-algorithm"))
-            .items(&[fl!("algorithm-eccp256"), fl!("algorithm-x25519")])
-            .default(
-                [AlgorithmId::EccP256, AlgorithmId::X25519]
-                    .iter()
-                    .position(|p| p == &flags.algorithm.unwrap_or(builder::DEFAULT_ALGORITHM))
-                    .unwrap(),
-            )
-            .report(true)
-            .interact_opt()?
-        {
-            Some(0) => AlgorithmId::EccP256,
-            Some(1) => AlgorithmId::X25519,
+            Some(0) => Tag::MlKem768X25519Tag,
             Some(_) => unreachable!(),
             None => return Ok(()),
         };
@@ -503,18 +441,7 @@ fn main() -> Result<(), Error> {
                     return Ok(());
                 }
             } else {
-                let name = match algorithm {
-                    AlgorithmId::X25519 => String::from(""),
-                    _ => Input::<String>::new()
-                        .with_prompt(format!(
-                            "{} [{}]",
-                            fl!("cli-setup-name-identity"),
-                            flags.name.as_deref().unwrap_or("age identity TAG_HEX")
-                        ))
-                        .allow_empty(true)
-                        .report(true)
-                        .interact_text()?,
-                };
+                let name = String::from("");
                 let mut displayed_yk4_warning = false;
                 let pin_policy = loop {
                     let pin_policy = match Select::new()
@@ -597,7 +524,7 @@ fn main() -> Result<(), Error> {
                 {
                     eprintln!();
                     (
-                        builder::IdentityBuilder::new(Some(tag), Some(algorithm), Some(slot))
+                        builder::IdentityBuilder::new(Some(tag), None, Some(slot))
                             .with_name(match name {
                                 s if s.is_empty() => flags.name,
                                 s => Some(s),
@@ -618,7 +545,7 @@ fn main() -> Result<(), Error> {
         let file_name = Input::<String>::new()
             .with_prompt(fl!("cli-setup-identity-file-name"))
             .default(format!(
-                "age-yubikey-identity-{}.txt",
+                "age-yubikey-tagpq-identity-{}.txt",
                 hex::encode(stub.tag)
             ))
             .report(true)
@@ -662,13 +589,13 @@ fn main() -> Result<(), Error> {
         let encrypt_usage = format!("$ cat foo.txt | {age_binary} -r {recipient} -o foo.txt.age");
         let decrypt_usage = format!("$ cat foo.txt.age | {age_binary} -d -i {file_name} > foo.txt");
         let identity_usage = format!(
-            "$ age-plugin-yubikey -i --serial {} --slot {} > {}",
+            "$ age-plugin-yubikey-tagpq -i --serial {} --slot {} > {}",
             stub.serial,
             util::slot_to_ui(&stub.slot),
             file_name,
         );
         let recipient_usage = format!(
-            "$ age-plugin-yubikey -l --serial {} --slot {}",
+            "$ age-plugin-yubikey-tagpq -l --serial {} --slot {}",
             stub.serial,
             util::slot_to_ui(&stub.slot),
         );

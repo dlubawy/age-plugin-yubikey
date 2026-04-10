@@ -65,7 +65,7 @@ pub enum Tag {
     PivP256,
     X25519,
     P256,
-    KemX25519,
+    MlKem768X25519Tag,
 }
 
 impl Tag {
@@ -75,7 +75,7 @@ impl Tag {
             Tag::PivP256 => "piv-p256",
             Tag::X25519 => "x25519tag",
             Tag::P256 => "p256tag",
-            Tag::KemX25519 => "mlkem768x25519tag",
+            Tag::MlKem768X25519Tag => "mlkem768x25519tag",
         }
     }
 
@@ -85,7 +85,7 @@ impl Tag {
             Tag::PivP256 => format!("piv-p256"),
             Tag::X25519 => format!("x25519tag"),
             Tag::P256 => format!("p256tag"),
-            Tag::KemX25519 => format!("mlkem768x25519tag"),
+            Tag::MlKem768X25519Tag => format!("mlkem768x25519tag"),
         }
     }
 }
@@ -138,8 +138,23 @@ impl IdentityBuilder {
     }
 
     pub fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
-        let tag = self.tag.unwrap_or(DEFAULT_TAG);
-        let algorithm = self.algorithm.unwrap_or(DEFAULT_ALGORITHM);
+        let tag = self
+            .tag
+            .unwrap_or_else(|| match (self.tag, self.algorithm) {
+                (None, Some(AlgorithmId::X25519)) => Tag::PivX25519,
+                (None, Some(AlgorithmId::EccP256)) => Tag::PivP256,
+                (None, None) => DEFAULT_TAG,
+                _ => panic!("invalid identity tag and algorithm"),
+            });
+        let algorithm = self
+            .algorithm
+            .unwrap_or_else(|| match (self.tag, self.algorithm) {
+                (Some(Tag::MlKem768X25519Tag), None) => AlgorithmId::X25519,
+                (Some(Tag::PivX25519), None) => AlgorithmId::X25519,
+                (Some(Tag::PivP256), None) => AlgorithmId::EccP256,
+                (None, None) => DEFAULT_ALGORITHM,
+                _ => panic!("invalid identity tag and algorithm"),
+            });
         let slot = match self.slot {
             Some(slot) => {
                 if !self.force {
@@ -231,7 +246,7 @@ impl IdentityBuilder {
 
         // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
         match (tag, algorithm) {
-            (Tag::KemX25519, AlgorithmId::X25519) => {
+            (Tag::MlKem768X25519Tag, AlgorithmId::X25519) => {
                 let kem_key = native::Kem::new();
                 let kem_policy = MlKem768Extension::from(kem_key.dk.seed());
                 let keys = Key::list(yubikey)?;

@@ -11,11 +11,9 @@ use yubikey::piv::AlgorithmId;
 use yubikey::{piv::RetiredSlotId, reader::Context, PinPolicy, Serial, TouchPolicy};
 
 use age_plugin_yubikey::builder::Tag;
-use age_plugin_yubikey::recipient::Recipient;
-use age_plugin_yubikey::util;
-use age_plugin_yubikey::*;
-
 use age_plugin_yubikey::error::Error;
+use age_plugin_yubikey::recipient::Recipient;
+use age_plugin_yubikey::*;
 
 #[derive(Debug, Options)]
 struct PluginOptions {
@@ -103,11 +101,7 @@ impl TryFrom<PluginOptions> for PluginFlags {
             .algorithm
             .map(util::algorithm_from_string)
             .transpose()?;
-        let tag = match algorithm {
-            Some(AlgorithmId::X25519) => Some(Tag::PivX25519),
-            Some(AlgorithmId::EccP256) => Some(Tag::PivP256),
-            _ => Some(Tag::PivP256),
-        };
+        let tag = None;
         let serial = opts.serial.map(|s| s.into());
         let slot = opts.slot.map(util::ui_to_slot).transpose()?;
         let pin_policy = opts
