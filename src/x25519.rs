@@ -10,21 +10,20 @@ use yubikey::Certificate;
 
 use std::fmt;
 
-use crate::{
-    recipient::{EphemeralKeyBytes, ENCRYPTED_FILE_KEY_BYTES, TAG_BYTES},
-    RecipientLine, RECIPIENT_PREFIX,
+use crate::recipient::{
+    EphemeralKeyBytes, RecipientLine, ENCRYPTED_FILE_KEY_BYTES, RECIPIENT_PREFIX, TAG_BYTES,
 };
 
-pub(crate) const EPK_BYTES: usize = 32;
-pub(crate) const STANZA_TAG: &str = "piv-x25519";
-pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-x25519";
-pub(crate) const OID_X25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.110");
+pub const EPK_BYTES: usize = 32;
+pub const STANZA_TAG: &str = "piv-x25519";
+pub const STANZA_KEY_LABEL: &[u8] = b"piv-x25519";
+pub const OID_X25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.110");
 
 #[derive(Clone, Debug)]
 pub struct PublicKey(x25519_dalek::PublicKey);
 
 impl PublicKey {
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let key_bytes: [u8; EPK_BYTES] = bytes.try_into().unwrap();
         match x25519_dalek::PublicKey::try_from(key_bytes) {
             Ok(pk) => Some(Self(pk)),
@@ -32,7 +31,7 @@ impl PublicKey {
         }
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
 }
@@ -62,7 +61,7 @@ impl fmt::Display for Recipient {
 
 impl Recipient {
     /// Attempts to parse a valid YubiKey recipient from its compressed SEC-1 byte encoding.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let data: [u8; EPK_BYTES] = bytes.try_into().expect("correct key length");
         match x25519_dalek::PublicKey::try_from(data) {
             Ok(pubkey) => Some(Self(pubkey)),
@@ -70,11 +69,11 @@ impl Recipient {
         }
     }
 
-    pub(crate) fn from_certificate(cert: &Certificate) -> Option<Self> {
+    pub fn from_certificate(cert: &Certificate) -> Option<Self> {
         Self::from_spki(&cert.subject_pki())
     }
 
-    pub(crate) fn from_spki(spki: &SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
+    pub fn from_spki(spki: &SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
         let pk_data: [u8; 32] = spki
             .subject_public_key
             .raw_bytes()
@@ -83,21 +82,21 @@ impl Recipient {
         Some(Self(x25519_dalek::PublicKey::from(pk_data)))
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
 
-    pub(crate) fn tag(&self) -> [u8; TAG_BYTES] {
+    pub fn tag(&self) -> [u8; TAG_BYTES] {
         let tag = Sha256::digest(self.0.as_bytes());
         (&tag[0..TAG_BYTES]).try_into().expect("length is correct")
     }
 
     /// Exposes the wrapped public key.
-    pub(crate) fn public_key(&self) -> &x25519_dalek::PublicKey {
+    pub fn public_key(&self) -> &x25519_dalek::PublicKey {
         &self.0
     }
 
-    pub(crate) fn wrap_file_key(&self, file_key: &FileKey) -> RecipientLine {
+    pub fn wrap_file_key(&self, file_key: &FileKey) -> RecipientLine {
         let esk = x25519_dalek::EphemeralSecret::random();
         let epk = x25519_dalek::PublicKey::from(&esk);
         let epk_bytes =

@@ -11,12 +11,12 @@ use dialoguer::Password;
 use log::{debug, error, warn};
 use rand::rngs::SysRng;
 use spki::der::zeroize::Zeroize;
-use std::convert::Infallible;
 use std::fmt;
 use std::io;
 use std::iter;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
+use std::{convert::Infallible, usize};
 use yubikey::{
     certificate::Certificate,
     piv::{decrypt_data, AlgorithmId, RetiredSlotId, SlotId},
@@ -27,19 +27,19 @@ use yubikey::{
 use crate::{
     error::Error,
     fl,
-    recipient::TAG_BYTES,
+    recipient::{Recipient, RecipientLine, TAG_BYTES},
     util::{otp_serial_prefix, Metadata},
-    Recipient, RecipientLine, IDENTITY_PREFIX,
+    IDENTITY_PREFIX,
 };
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const FIFTEEN_SECONDS: Duration = Duration::from_secs(15);
 
-pub(crate) fn is_connected(reader: Reader) -> bool {
+pub fn is_connected(reader: Reader) -> bool {
     filter_connected(&reader)
 }
 
-pub(crate) fn filter_connected(reader: &Reader) -> bool {
+pub fn filter_connected(reader: &Reader) -> bool {
     match reader.open() {
         Err(yubikey::Error::PcscError {
             inner: Some(pcsc::Error::NoSmartcard | pcsc::Error::RemovedCard),
@@ -71,7 +71,7 @@ pub(crate) fn filter_connected(reader: &Reader) -> bool {
     }
 }
 
-pub(crate) fn wait_for_readers() -> Result<Context, Error> {
+pub fn wait_for_readers() -> Result<Context, Error> {
     // Start a 15-second timer waiting for a YubiKey to be inserted (if necessary).
     let start = SystemTime::now();
     loop {
@@ -157,7 +157,7 @@ fn open_sesame(
 ///
 /// This is equivalent to [`Reader::open`], but additionally handles the presence of
 /// agents (which can indefinitely hold exclusive access to a YubiKey).
-pub(crate) fn open_connection(reader: &Reader) -> Result<YubiKey, yubikey::Error> {
+pub fn open_connection(reader: &Reader) -> Result<YubiKey, yubikey::Error> {
     open_sesame(|| reader.open())
 }
 
@@ -214,7 +214,7 @@ fn open_by_serial(serial: Serial) -> Result<YubiKey, yubikey::Error> {
     })
 }
 
-pub(crate) fn open(serial: Option<Serial>) -> Result<YubiKey, Error> {
+pub fn open(serial: Option<Serial>) -> Result<YubiKey, Error> {
     if !Context::open()?.iter()?.any(is_connected) {
         if let Some(serial) = serial {
             eprintln!(
@@ -271,7 +271,7 @@ pub(crate) fn open(serial: Option<Serial>) -> Result<YubiKey, Error> {
 ///   YubiKey's state were to potentially cache the PIN and/or touch (depending on the
 ///   policies of the slot). We want to allow these to persist beyond our execution, for
 ///   usability.
-pub(crate) fn disconnect_without_reset(yubikey: YubiKey) {
+pub fn disconnect_without_reset(yubikey: YubiKey) {
     let _ = yubikey.disconnect(pcsc::Disposition::LeaveCard);
 }
 
@@ -300,7 +300,7 @@ fn request_pin<E, E2>(
     }
 }
 
-pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
+pub fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
     const DEFAULT_PIN: &str = "123456";
     const DEFAULT_PUK: &str = "12345678";
 
@@ -391,7 +391,7 @@ pub(crate) fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
 
 /// Returns an iterator of keys that are occupying plugin-compatible slots, along with the
 /// corresponding recipient if the key is compatible with this plugin.
-pub(crate) fn list_slots(
+pub fn list_slots(
     yubikey: &mut YubiKey,
 ) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Option<Recipient>)>, Error> {
     Ok(Key::list(yubikey)?.into_iter().filter_map(|key| {
@@ -408,7 +408,7 @@ pub(crate) fn list_slots(
 }
 
 /// Returns an iterator of keys that are compatible with this plugin.
-pub(crate) fn list_compatible(
+pub fn list_compatible(
     yubikey: &mut YubiKey,
 ) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Recipient)>, Error> {
     list_slots(yubikey)
@@ -418,10 +418,10 @@ pub(crate) fn list_compatible(
 /// A reference to an age key stored in a YubiKey.
 #[derive(Debug)]
 pub struct Stub {
-    pub(crate) serial: Serial,
-    pub(crate) slot: RetiredSlotId,
-    pub(crate) tag: [u8; TAG_BYTES],
-    pub(crate) identity_index: usize,
+    pub serial: Serial,
+    pub slot: RetiredSlotId,
+    pub tag: [u8; TAG_BYTES],
+    pub identity_index: usize,
 }
 
 impl fmt::Display for Stub {
@@ -450,7 +450,7 @@ impl Stub {
     ///
     /// Does not check that the `PublicKey` matches the given `(Serial, SlotId)` tuple;
     /// this is checked at decryption time.
-    pub(crate) fn new(serial: Serial, slot: RetiredSlotId, recipient: &Recipient) -> Self {
+    pub fn new(serial: Serial, slot: RetiredSlotId, recipient: &Recipient) -> Self {
         Stub {
             serial,
             slot,
@@ -459,7 +459,7 @@ impl Stub {
         }
     }
 
-    pub(crate) fn from_bytes(bytes: &[u8], identity_index: usize) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8], identity_index: usize) -> Option<Self> {
         if bytes.len() < 9 {
             return None;
         }
@@ -486,7 +486,7 @@ impl Stub {
     /// - `Ok(Ok(None))` if the user told us to skip this YubiKey.
     /// - `Ok(Err(_))` if we encountered an error while trying to connect to the YubiKey.
     /// - `Err(_)` on communication errors with the age client.
-    pub(crate) fn connect<E>(
+    pub fn connect<E>(
         &self,
         callbacks: &mut dyn Callbacks<E>,
     ) -> io::Result<Result<Option<Connection>, identity::Error>> {
@@ -628,7 +628,7 @@ impl Stub {
     }
 }
 
-pub(crate) struct Connection {
+pub struct Connection {
     yubikey: YubiKey,
     cert: Certificate,
     pk: Recipient,
@@ -640,11 +640,11 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn recipient(&self) -> &Recipient {
+    pub fn recipient(&self) -> &Recipient {
         &self.pk
     }
 
-    pub(crate) fn request_pin_if_necessary<E>(
+    pub fn request_pin_if_necessary<E>(
         &mut self,
         callbacks: &mut dyn Callbacks<E>,
     ) -> io::Result<Result<(), identity::Error>> {
@@ -702,7 +702,7 @@ impl Connection {
         Ok(Ok(()))
     }
 
-    pub(crate) fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
+    pub fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
         assert_eq!(self.tag, line.tag);
 
         let algorithm = line.epk_bytes.algorithm();
@@ -774,7 +774,7 @@ impl Connection {
     /// Close this connection without resetting the YubiKey.
     ///
     /// This can be used to preserve the YubiKey's PIN and touch caches.
-    pub(crate) fn disconnect_without_reset(self) {
+    pub fn disconnect_without_reset(self) {
         disconnect_without_reset(self.yubikey);
     }
 }

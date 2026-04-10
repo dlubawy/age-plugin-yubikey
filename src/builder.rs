@@ -1,11 +1,16 @@
 use std::time::SystemTime;
 
 use dialoguer::Password;
-use rand::{rngs::SysRng, TryRng};
 use spki::{der::referenced::OwnedToRef, SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
-use x509_cert::{certificate::Rfc5280, serial_number::SerialNumber, time::Validity};
+use x509_cert::{
+    builder::{profile::BuilderProfile, Builder, CertificateBuilder},
+    certificate::Rfc5280,
+    name::Name,
+    serial_number::SerialNumber,
+    time::Validity,
+};
 use yubikey::{
-    certificate::{CertInfo, Certificate},
+    certificate::{yubikey_signer, CertInfo, Certificate},
     piv::{generate as yubikey_generate, AlgorithmId, RetiredSlotId, SlotId},
     Key, PinPolicy, TouchPolicy, YubiKey,
 };
@@ -14,15 +19,79 @@ use crate::{
     error::Error,
     fl,
     key::{self, Stub},
-    util::{Metadata, UsagePolicies},
-    Recipient, BINARY_NAME, USABLE_SLOTS,
+    native::{self},
+    recipient::Recipient,
+    util::{Metadata, MlKem768Extension, UsagePolicies},
+    BINARY_NAME, USABLE_SLOTS,
 };
 
-pub(crate) const DEFAULT_ALGORITHM: AlgorithmId = AlgorithmId::EccP256;
-pub(crate) const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
-pub(crate) const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
+pub const DEFAULT_TAG: Tag = Tag::PivP256;
+pub const DEFAULT_ALGORITHM: AlgorithmId = AlgorithmId::EccP256;
+pub const DEFAULT_PIN_POLICY: PinPolicy = PinPolicy::Once;
+pub const DEFAULT_TOUCH_POLICY: TouchPolicy = TouchPolicy::Always;
 
-pub(crate) struct IdentityBuilder {
+pub struct SelfSigned {
+    subject: Name,
+}
+
+impl BuilderProfile for SelfSigned {
+    fn get_issuer(&self, subject: &Name) -> Name {
+        // RFC 5280 Section 3.2:
+        //
+        // > Self-issued certificates are CA certificates in which the issuer and subject
+        // > are the same entity. [..] Self-signed certificates are self-issued
+        // > certificates where the digital signature may be verified by the public key
+        // > bound into the certificate.
+        subject.clone()
+    }
+
+    fn get_subject(&self) -> Name {
+        self.subject.clone()
+    }
+
+    fn build_extensions(
+        &self,
+        _spk: SubjectPublicKeyInfoRef<'_>,
+        _issuer_spk: SubjectPublicKeyInfoRef<'_>,
+        _tbs: &x509_cert::TbsCertificate,
+    ) -> x509_cert::builder::Result<Vec<x509_cert::ext::Extension>> {
+        Ok(vec![])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tag {
+    PivX25519,
+    PivP256,
+    X25519,
+    P256,
+    KemX25519,
+}
+
+impl Tag {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Tag::PivX25519 => "piv-x25519",
+            Tag::PivP256 => "piv-p256",
+            Tag::X25519 => "x25519tag",
+            Tag::P256 => "p256tag",
+            Tag::KemX25519 => "mlkem768x25519tag",
+        }
+    }
+
+    pub fn to_string(&self) -> std::string::String {
+        match self {
+            Tag::PivX25519 => format!("piv-p256"),
+            Tag::PivP256 => format!("piv-p256"),
+            Tag::X25519 => format!("x25519tag"),
+            Tag::P256 => format!("p256tag"),
+            Tag::KemX25519 => format!("mlkem768x25519tag"),
+        }
+    }
+}
+
+pub struct IdentityBuilder {
+    tag: Option<Tag>,
     algorithm: Option<AlgorithmId>,
     slot: Option<RetiredSlotId>,
     force: bool,
@@ -32,8 +101,13 @@ pub(crate) struct IdentityBuilder {
 }
 
 impl IdentityBuilder {
-    pub(crate) fn new(algorithm: Option<AlgorithmId>, slot: Option<RetiredSlotId>) -> Self {
+    pub fn new(
+        tag: Option<Tag>,
+        algorithm: Option<AlgorithmId>,
+        slot: Option<RetiredSlotId>,
+    ) -> Self {
         IdentityBuilder {
+            tag,
             algorithm,
             slot,
             name: None,
@@ -43,27 +117,28 @@ impl IdentityBuilder {
         }
     }
 
-    pub(crate) fn with_name(mut self, name: Option<String>) -> Self {
+    pub fn with_name(mut self, name: Option<String>) -> Self {
         self.name = name;
         self
     }
 
-    pub(crate) fn with_pin_policy(mut self, pin_policy: Option<PinPolicy>) -> Self {
+    pub fn with_pin_policy(mut self, pin_policy: Option<PinPolicy>) -> Self {
         self.pin_policy = pin_policy;
         self
     }
 
-    pub(crate) fn with_touch_policy(mut self, touch_policy: Option<TouchPolicy>) -> Self {
+    pub fn with_touch_policy(mut self, touch_policy: Option<TouchPolicy>) -> Self {
         self.touch_policy = touch_policy;
         self
     }
 
-    pub(crate) fn force(mut self, force: bool) -> Self {
+    pub fn force(mut self, force: bool) -> Self {
         self.force = force;
         self
     }
 
-    pub(crate) fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
+    pub fn build(self, yubikey: &mut YubiKey) -> Result<(Stub, Recipient, Metadata), Error> {
+        let tag = self.tag.unwrap_or(DEFAULT_TAG);
         let algorithm = self.algorithm.unwrap_or(DEFAULT_ALGORITHM);
         let slot = match self.slot {
             Some(slot) => {
@@ -128,10 +203,8 @@ impl IdentityBuilder {
         let serial = {
             // TODO: https://github.com/RustCrypto/formats/pull/1270
             // adds `SerialNumber::generate`; use it when available.
-            let mut serial = [0; 20];
-            SysRng
-                .try_fill_bytes(&mut serial)
-                .expect("serial of proper length");
+            let mut serial = [0; 19];
+            rand::fill(&mut serial);
             SerialNumber::new(&serial).expect("valid")
         };
 
@@ -157,8 +230,67 @@ impl IdentityBuilder {
         }
 
         // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
-        match algorithm {
-            AlgorithmId::X25519 => {
+        match (tag, algorithm) {
+            (Tag::KemX25519, AlgorithmId::X25519) => {
+                let kem_key = native::Kem::new();
+                let kem_policy = MlKem768Extension::from(kem_key.dk.seed());
+                let keys = Key::list(yubikey)?;
+                let attest_key = keys
+                    .iter()
+                    .find(|p| p.slot() == SlotId::Signature)
+                    .expect("signature key exists");
+                let mut builder = CertificateBuilder::new(
+                    SelfSigned {
+                        subject: format!(
+                            "O={BINARY_NAME},OU={},CN={name}",
+                            env!("CARGO_PKG_VERSION")
+                        )
+                        .parse()
+                        .map_err(Error::Build)?,
+                    },
+                    serial.clone(),
+                    Validity::<Rfc5280>::new(
+                        SystemTime::now().try_into().map_err(Error::Build)?,
+                        x509_cert::time::Time::INFINITY,
+                    ),
+                    generated.clone(),
+                )
+                .unwrap();
+                builder
+                    .add_extension(&policies)
+                    .map_err(|e| match e {
+                        e => panic!("Cannot handle this error with the yubikey 0.8 crate: {e}"),
+                    })
+                    .unwrap();
+                builder
+                    .add_extension(&kem_policy)
+                    .map_err(|e| match e {
+                        e => panic!("Cannot add ML-KEM seed to certificate"),
+                    })
+                    .unwrap();
+                let signer = yubikey_signer::Signer::<
+                    '_,
+                    yubikey_signer::YubiRsa<yubikey_signer::Rsa2048>,
+                >::new(
+                    yubikey,
+                    attest_key.slot(),
+                    attest_key.certificate().subject_pki(),
+                )?;
+                let cert = builder.build(&signer).expect("signature");
+                let cert = Certificate { cert };
+                cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed)
+                    .unwrap();
+                let recipient = Recipient::from_certificate(&cert).unwrap();
+
+                let metadata = Metadata::extract(yubikey, slot, &cert, false).unwrap();
+
+                Ok((
+                    Stub::new(yubikey.serial(), slot, &recipient),
+                    recipient,
+                    metadata,
+                ))
+            }
+            (Tag::PivX25519, AlgorithmId::X25519) => {
                 let buf = yubikey::piv::attest(yubikey, SlotId::Retired(slot))?;
                 let cert = Certificate::from_bytes(buf)?;
                 let _ = cert.write(yubikey, SlotId::Retired(slot), CertInfo::Uncompressed);
@@ -171,7 +303,7 @@ impl IdentityBuilder {
                     metadata,
                 ))
             }
-            _ => {
+            (Tag::PivP256, AlgorithmId::EccP256) => {
                 let cert = Certificate::generate_self_signed::<_, p256::NistP256>(
                     yubikey,
                     SlotId::Retired(slot),
@@ -202,6 +334,7 @@ impl IdentityBuilder {
                     metadata,
                 ))
             }
+            (tag, _) => Err(Error::InvalidFlagTui(tag.as_str().to_string())),
         }
     }
 }

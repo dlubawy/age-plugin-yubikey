@@ -27,6 +27,11 @@
 
 ## YubiKey metadata
 
+tag-piv-p256 = PivP256
+tag-piv-x25519 = PivX25519
+tag-kem-x25519 = KemX25519
+unknown-tag = Unknown
+
 algorithm-eccp256 = ECCP256
 algorithm-x25519 = X25519
 unknown-algorithm = Unknown
@@ -69,6 +74,7 @@ cli-setup-intro =
     When asked below to select an option, use the up/down arrow keys to
     make your choice, or press [Esc] or [q] to quit.
 
+cli-setup-tag                 = 🏷️ Select an identity tag
 cli-setup-algorithm           = 💾 Select an algorithm
 cli-setup-insert-yk           = ⏳ Please insert the {-yubikey} you want to set up.
 cli-setup-yk-name             = {$yubikey_name} (Serial: {$yubikey_serial})

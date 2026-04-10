@@ -6,75 +6,16 @@ use std::io::{self, Write};
 use age_plugin::run_state_machine;
 use dialoguer::{Confirm, Input, Select};
 use gumdrop::Options;
-use i18n_embed::{
-    fluent::{fluent_language_loader, FluentLanguageLoader},
-    DesktopLanguageRequester,
-};
-use lazy_static::lazy_static;
-use rust_embed::RustEmbed;
+use i18n_embed::DesktopLanguageRequester;
 use yubikey::piv::AlgorithmId;
 use yubikey::{piv::RetiredSlotId, reader::Context, PinPolicy, Serial, TouchPolicy};
 
-mod builder;
-mod error;
-mod key;
-mod native;
-mod p256;
-mod plugin;
-mod util;
-mod x25519;
+use age_plugin_yubikey::builder::{Tag, DEFAULT_TAG};
+use age_plugin_yubikey::recipient::Recipient;
+use age_plugin_yubikey::util;
+use age_plugin_yubikey::*;
 
-mod recipient;
-use recipient::{Recipient, RecipientLine, RECIPIENT_PREFIX};
-
-use error::Error;
-
-const PLUGIN_NAME: &str = "yubikey";
-const BINARY_NAME: &str = "age-plugin-yubikey";
-const IDENTITY_PREFIX: &str = "age-plugin-yubikey-";
-
-const USABLE_SLOTS: [RetiredSlotId; 20] = [
-    RetiredSlotId::R1,
-    RetiredSlotId::R2,
-    RetiredSlotId::R3,
-    RetiredSlotId::R4,
-    RetiredSlotId::R5,
-    RetiredSlotId::R6,
-    RetiredSlotId::R7,
-    RetiredSlotId::R8,
-    RetiredSlotId::R9,
-    RetiredSlotId::R10,
-    RetiredSlotId::R11,
-    RetiredSlotId::R12,
-    RetiredSlotId::R13,
-    RetiredSlotId::R14,
-    RetiredSlotId::R15,
-    RetiredSlotId::R16,
-    RetiredSlotId::R17,
-    RetiredSlotId::R18,
-    RetiredSlotId::R19,
-    RetiredSlotId::R20,
-];
-
-#[derive(RustEmbed)]
-#[folder = "i18n"]
-struct Translations;
-
-const TRANSLATIONS: Translations = Translations {};
-
-lazy_static! {
-    static ref LANGUAGE_LOADER: FluentLanguageLoader = fluent_language_loader!();
-}
-
-#[macro_export]
-macro_rules! fl {
-    ($message_id:literal) => {{
-        i18n_embed_fl::fl!($crate::LANGUAGE_LOADER, $message_id)
-    }};
-    ($message_id:literal, $($kwarg:expr),* $(,)*) => {{
-        i18n_embed_fl::fl!($crate::LANGUAGE_LOADER, $message_id, $($kwarg,)*)
-    }};
-}
+use age_plugin_yubikey::error::Error;
 
 #[derive(Debug, Options)]
 struct PluginOptions {
@@ -93,6 +34,12 @@ struct PluginOptions {
 
     #[options(help = "Force --generate to overwrite a filled slot.")]
     force: bool,
+
+    #[options(
+        help = "Age tag used to generate the identity with. Defaults to piv-p256.",
+        no_short
+    )]
+    tag: Option<String>,
 
     #[options(
         help = "Algorithm to generate the key with. Defaults to ECCP256.",
@@ -144,6 +91,7 @@ struct PluginOptions {
 }
 
 struct PluginFlags {
+    tag: Option<Tag>,
     algorithm: Option<AlgorithmId>,
     serial: Option<Serial>,
     slot: Option<RetiredSlotId>,
@@ -157,6 +105,7 @@ impl TryFrom<PluginOptions> for PluginFlags {
     type Error = Error;
 
     fn try_from(opts: PluginOptions) -> Result<Self, Self::Error> {
+        let tag = opts.tag.map(util::tag_from_string).transpose()?;
         let algorithm = opts
             .algorithm
             .map(util::algorithm_from_string)
@@ -173,6 +122,7 @@ impl TryFrom<PluginOptions> for PluginFlags {
             .transpose()?;
 
         Ok(PluginFlags {
+            tag,
             algorithm,
             serial,
             slot,
@@ -187,12 +137,13 @@ impl TryFrom<PluginOptions> for PluginFlags {
 fn generate(flags: PluginFlags) -> Result<(), Error> {
     let mut yubikey = key::open(flags.serial)?;
 
-    let (stub, recipient, metadata) = builder::IdentityBuilder::new(flags.algorithm, flags.slot)
-        .with_name(flags.name)
-        .with_pin_policy(flags.pin_policy)
-        .with_touch_policy(flags.touch_policy)
-        .force(flags.force)
-        .build(&mut yubikey)?;
+    let (stub, recipient, metadata) =
+        builder::IdentityBuilder::new(flags.tag, flags.algorithm, flags.slot)
+            .with_name(flags.name)
+            .with_pin_policy(flags.pin_policy)
+            .with_touch_policy(flags.touch_policy)
+            .force(flags.force)
+            .build(&mut yubikey)?;
 
     util::print_identity(stub, recipient, metadata);
 
@@ -312,7 +263,6 @@ fn list(flags: PluginFlags, all: bool) -> Result<(), Error> {
         all,
         |_, recipient, metadata| {
             println!("{metadata}");
-            println!("{recipient}");
         },
     )
 }
@@ -369,6 +319,29 @@ fn main() -> Result<(), Error> {
             )
         );
         eprintln!();
+
+        let tag = match Select::new()
+            .with_prompt(fl!("cli-setup-tag"))
+            .items(&[
+                fl!("tag-piv-p256"),
+                fl!("tag-piv-x25519"),
+                fl!("tag-kem-x25519"),
+            ])
+            .default(
+                [Tag::PivP256, Tag::PivX25519, Tag::KemX25519]
+                    .iter()
+                    .position(|p| p == &flags.tag.unwrap_or(DEFAULT_TAG))
+                    .unwrap(),
+            )
+            .report(true)
+            .interact_opt()?
+        {
+            Some(0) => Tag::PivP256,
+            Some(1) => Tag::PivX25519,
+            Some(2) => Tag::KemX25519,
+            Some(_) => unreachable!(),
+            None => return Ok(()),
+        };
 
         let algorithm = match Select::new()
             .with_prompt(fl!("cli-setup-algorithm"))
@@ -600,7 +573,7 @@ fn main() -> Result<(), Error> {
                 {
                     eprintln!();
                     (
-                        builder::IdentityBuilder::new(Some(algorithm), Some(slot))
+                        builder::IdentityBuilder::new(Some(tag), Some(algorithm), Some(slot))
                             .with_name(match name {
                                 s if s.is_empty() => flags.name,
                                 s => Some(s),

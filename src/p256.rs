@@ -15,21 +15,21 @@ use yubikey::Certificate;
 
 use std::fmt;
 
-use crate::{
-    recipient::{static_tag, EphemeralKeyBytes, ENCRYPTED_FILE_KEY_BYTES, TAG_BYTES},
-    RecipientLine, RECIPIENT_PREFIX,
+use crate::recipient::{
+    static_tag, EphemeralKeyBytes, RecipientLine, ENCRYPTED_FILE_KEY_BYTES, RECIPIENT_PREFIX,
+    TAG_BYTES,
 };
 
-pub(crate) const EPK_BYTES: usize = 33;
-pub(crate) const STANZA_TAG: &str = "piv-p256";
-pub(crate) const STANZA_KEY_LABEL: &[u8] = b"piv-p256";
-pub(crate) const OID_P256: ObjectIdentifier = p256::elliptic_curve::ALGORITHM_OID;
+pub const EPK_BYTES: usize = 33;
+pub const STANZA_TAG: &str = "piv-p256";
+pub const STANZA_KEY_LABEL: &[u8] = b"piv-p256";
+pub const OID_P256: ObjectIdentifier = p256::elliptic_curve::ALGORITHM_OID;
 
 #[derive(Clone, Debug)]
 pub struct PublicKey(Sec1Point);
 
 impl PublicKey {
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let key_bytes: [u8; EPK_BYTES] = bytes.try_into().unwrap();
         let encoded = Sec1Point::from_bytes(key_bytes).ok()?;
         if encoded.is_compressed()
@@ -43,12 +43,12 @@ impl PublicKey {
         }
     }
 
-    pub(crate) fn decompress(&self) -> Option<Self> {
+    pub fn decompress(&self) -> Option<Self> {
         let p = ::p256::PublicKey::from_sec1_point(&self.0).unwrap();
         Some(Self(p.to_sec1_point(false)))
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
 }
@@ -79,7 +79,7 @@ impl fmt::Display for Recipient {
 
 impl Recipient {
     /// Attempts to parse a valid YubiKey recipient from its compressed SEC-1 byte encoding.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let encoded = Sec1Point::from_bytes(bytes).ok()?;
         if encoded.is_compressed() {
             Self::from_encoded(&encoded)
@@ -88,11 +88,11 @@ impl Recipient {
         }
     }
 
-    pub(crate) fn from_certificate(cert: &Certificate) -> Option<Self> {
+    pub fn from_certificate(cert: &Certificate) -> Option<Self> {
         Self::from_spki(cert.subject_pki())
     }
 
-    pub(crate) fn from_spki(spki: SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
+    pub fn from_spki(spki: SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
         // TODO: https://github.com/RustCrypto/formats/issues/1604
         ::p256::PublicKey::try_from(spki).ok().map(Recipient)
     }
@@ -106,20 +106,20 @@ impl Recipient {
     }
 
     /// Returns the compressed SEC-1 encoding of this recipient.
-    pub(crate) fn to_encoded(&self) -> Sec1Point {
+    pub fn to_encoded(&self) -> Sec1Point {
         self.0.to_sec1_point(true)
     }
 
-    pub(crate) fn tag(&self) -> [u8; TAG_BYTES] {
+    pub fn tag(&self) -> [u8; TAG_BYTES] {
         static_tag(self.to_encoded().as_bytes())
     }
 
     /// Exposes the wrapped public key.
-    pub(crate) fn public_key(&self) -> &::p256::PublicKey {
+    pub fn public_key(&self) -> &::p256::PublicKey {
         &self.0
     }
 
-    pub(crate) fn wrap_file_key(&self, file_key: &FileKey) -> RecipientLine {
+    pub fn wrap_file_key(&self, file_key: &FileKey) -> RecipientLine {
         let esk =
             ::p256::ecdh::EphemeralSecret::try_generate_from_rng(&mut SysRng).expect("random key");
         let epk = esk.public_key().to_sec1_point(true);

@@ -7,9 +7,13 @@ use age_plugin::{
 use std::collections::{HashMap, HashSet};
 use std::io;
 
-use crate::{fl, key, Recipient, RecipientLine, PLUGIN_NAME};
+use crate::{
+    fl, key,
+    recipient::{Recipient, RecipientLine},
+    PLUGIN_NAME,
+};
 
-pub(crate) struct Handler;
+pub struct Handler;
 
 impl PluginHandler for Handler {
     type RecipientV1 = RecipientPlugin;
@@ -25,7 +29,7 @@ impl PluginHandler for Handler {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct RecipientPlugin {
+pub struct RecipientPlugin {
     recipients: Vec<Recipient>,
     yubikeys: Vec<key::Stub>,
 }
@@ -121,7 +125,7 @@ impl RecipientPluginV1 for RecipientPlugin {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct IdentityPlugin {
+pub struct IdentityPlugin {
     yubikeys: Vec<key::Stub>,
 }
 
@@ -281,13 +285,13 @@ impl SupportedStanza {
         }
     }
 
-    pub(crate) fn matches_stub(&self, stub: &key::Stub) -> bool {
+    pub fn matches_stub(&self, stub: &key::Stub) -> bool {
         match self {
             SupportedStanza(line) => stub.tag == line.tag,
         }
     }
 
-    pub(crate) fn unwrap_file_key(&self, conn: &mut key::Connection) -> Result<FileKey, ()> {
+    pub fn unwrap_file_key(&self, conn: &mut key::Connection) -> Result<FileKey, ()> {
         match self {
             SupportedStanza(line) => line.unwrap_file_key(conn),
         }
