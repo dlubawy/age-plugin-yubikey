@@ -10,7 +10,7 @@ use i18n_embed::DesktopLanguageRequester;
 use yubikey::piv::AlgorithmId;
 use yubikey::{piv::RetiredSlotId, reader::Context, PinPolicy, Serial, TouchPolicy};
 
-use age_plugin_yubikey::builder::{Tag, DEFAULT_TAG};
+use age_plugin_yubikey::builder::Tag;
 use age_plugin_yubikey::recipient::Recipient;
 use age_plugin_yubikey::util;
 use age_plugin_yubikey::*;
@@ -34,12 +34,6 @@ struct PluginOptions {
 
     #[options(help = "Force --generate to overwrite a filled slot.")]
     force: bool,
-
-    #[options(
-        help = "Age tag used to generate the identity with. Defaults to piv-p256.",
-        no_short
-    )]
-    tag: Option<String>,
 
     #[options(
         help = "Algorithm to generate the key with. Defaults to ECCP256.",
@@ -105,11 +99,15 @@ impl TryFrom<PluginOptions> for PluginFlags {
     type Error = Error;
 
     fn try_from(opts: PluginOptions) -> Result<Self, Self::Error> {
-        let tag = opts.tag.map(util::tag_from_string).transpose()?;
         let algorithm = opts
             .algorithm
             .map(util::algorithm_from_string)
             .transpose()?;
+        let tag = match algorithm {
+            Some(AlgorithmId::X25519) => Some(Tag::PivX25519),
+            Some(AlgorithmId::EccP256) => Some(Tag::PivP256),
+            _ => Some(Tag::PivP256),
+        };
         let serial = opts.serial.map(|s| s.into());
         let slot = opts.slot.map(util::ui_to_slot).transpose()?;
         let pin_policy = opts
@@ -261,7 +259,7 @@ fn list(flags: PluginFlags, all: bool) -> Result<(), Error> {
         &fl!("printed-kind-recipients"),
         flags,
         all,
-        |_, recipient, metadata| {
+        |_, _recipient, metadata| {
             println!("{metadata}");
         },
     )
@@ -320,29 +318,6 @@ fn main() -> Result<(), Error> {
         );
         eprintln!();
 
-        let tag = match Select::new()
-            .with_prompt(fl!("cli-setup-tag"))
-            .items(&[
-                fl!("tag-piv-p256"),
-                fl!("tag-piv-x25519"),
-                fl!("tag-kem-x25519"),
-            ])
-            .default(
-                [Tag::PivP256, Tag::PivX25519, Tag::KemX25519]
-                    .iter()
-                    .position(|p| p == &flags.tag.unwrap_or(DEFAULT_TAG))
-                    .unwrap(),
-            )
-            .report(true)
-            .interact_opt()?
-        {
-            Some(0) => Tag::PivP256,
-            Some(1) => Tag::PivX25519,
-            Some(2) => Tag::KemX25519,
-            Some(_) => unreachable!(),
-            None => return Ok(()),
-        };
-
         let algorithm = match Select::new()
             .with_prompt(fl!("cli-setup-algorithm"))
             .items(&[fl!("algorithm-eccp256"), fl!("algorithm-x25519")])
@@ -359,6 +334,12 @@ fn main() -> Result<(), Error> {
             Some(1) => AlgorithmId::X25519,
             Some(_) => unreachable!(),
             None => return Ok(()),
+        };
+
+        let tag = match algorithm {
+            AlgorithmId::X25519 => Tag::PivX25519,
+            AlgorithmId::EccP256 => Tag::P256,
+            _ => unreachable!(),
         };
 
         if !Context::open()?.iter()?.any(key::is_connected) {
