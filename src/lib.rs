@@ -17,7 +17,27 @@ pub mod recipient;
 
 pub const PLUGIN_NAME: &str = "yubikey";
 pub const BINARY_NAME: &str = "age-plugin-yubikey";
-pub const IDENTITY_PREFIX: &str = "age-plugin-yubikey-";
+
+#[derive(Debug, Clone, Copy)]
+pub enum IdentityPrefix {
+    Default,
+    TagPq,
+}
+
+impl IdentityPrefix {
+    pub fn as_str(&self) -> &str {
+        match self {
+            IdentityPrefix::TagPq => "age-plugin-yubikey-tagpq-",
+            IdentityPrefix::Default => "age-plugin-yubikey-",
+        }
+    }
+    pub fn hrp(&self) -> bech32::Hrp {
+        match self {
+            IdentityPrefix::TagPq => bech32::Hrp::parse_unchecked("age-plugin-yubikey-tagpq-"),
+            IdentityPrefix::Default => bech32::Hrp::parse_unchecked("age-plugin-yubikey-"),
+        }
+    }
+}
 
 pub const USABLE_SLOTS: [RetiredSlotId; 20] = [
     RetiredSlotId::R1,

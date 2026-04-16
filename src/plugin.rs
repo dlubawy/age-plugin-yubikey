@@ -59,7 +59,7 @@ impl RecipientPluginV1 for RecipientPlugin {
         bytes: &[u8],
     ) -> Result<(), recipient::Error> {
         if let Some(stub) = if plugin_name == PLUGIN_NAME {
-            key::Stub::from_bytes(bytes, index)
+            key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default)
         } else {
             None
         } {
@@ -137,7 +137,7 @@ impl IdentityPluginV1 for IdentityPlugin {
         bytes: &[u8],
     ) -> Result<(), identity::Error> {
         if let Some(stub) = if plugin_name == PLUGIN_NAME {
-            key::Stub::from_bytes(bytes, index)
+            key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default)
         } else {
             None
         } {

@@ -117,11 +117,10 @@ impl MlKem768Extension {
     pub fn as_bytes(&self) -> &[u8; NSK] {
         &self.0
     }
-}
 
-impl From<[u8; NSK]> for MlKem768Extension {
-    fn from(value: [u8; NSK]) -> Self {
-        Self(value)
+    pub(crate) fn from_bytes(encoded: &[u8]) -> Self {
+        let bytes: [u8; NSK] = encoded.try_into().expect("secret length");
+        Self(bytes)
     }
 }
 
@@ -131,16 +130,22 @@ impl AssociatedOid for MlKem768Extension {
 
 impl der::Encode for MlKem768Extension {
     fn encoded_len(&self) -> der::Result<der::Length> {
-        Ok(der::Length::new(43))
+        let length: u32 = base64::encoded_len(NSK, true)
+            .unwrap()
+            .try_into()
+            .expect("encoded length");
+        Ok(der::Length::new(length))
     }
 
     fn encode(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
         // TODO: https://github.com/RustCrypto/formats/issues/1490
         // Is this the correct encoding?
-        let mut encoded_bytes: [u8; 43] = [0; 43];
-        BASE64_STANDARD_NO_PAD
+        let size: usize = base64::encoded_len(NSK, true).unwrap();
+        let mut encoded_bytes: Vec<u8> = Vec::new();
+        encoded_bytes.resize(size, 0);
+        BASE64_STANDARD
             .encode_slice(self.0, &mut encoded_bytes)
-            .unwrap();
+            .expect("encoded seed");
         encoder.write(&encoded_bytes)
     }
 }
@@ -150,14 +155,19 @@ impl<'a> der::Decode<'a> for MlKem768Extension {
 
     fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
         // TODO: https://github.com/RustCrypto/formats/issues/1492
-        let mut encoded_bytes: [u8; 43] = [0; 43];
-        decoder
-            .read_into(&mut encoded_bytes)
-            .expect("base64 length");
+        let size: usize = base64::encoded_len(NSK, true).unwrap();
+        let mut encoded_bytes: Vec<u8> = Vec::new();
+        encoded_bytes.resize(size, 0);
+        decoder.read_into(&mut encoded_bytes).expect("base64 read");
+
+        let decoded_size = base64::decoded_len_estimate(size);
+        let mut decoded_bytes: Vec<u8> = Vec::new();
+        decoded_bytes.resize(decoded_size, 0);
+        BASE64_STANDARD
+            .decode_slice(encoded_bytes, &mut decoded_bytes)
+            .map_err(|_| der::ErrorKind::Failed)?;
         let mut seed: [u8; NSK] = [0; NSK];
-        BASE64_STANDARD_NO_PAD
-            .decode_slice_unchecked(encoded_bytes, &mut seed)
-            .unwrap();
+        seed.copy_from_slice(&decoded_bytes[..NSK]);
         Ok(Self(seed))
     }
 }

@@ -2,11 +2,10 @@
 
 use age_core::{
     format::{FileKey, FILE_KEY_BYTES},
-    primitives::{aead_decrypt, hkdf},
+    primitives::{aead_decrypt, bech32_encode, hkdf},
     secrecy::{ExposeSecret, SecretString},
 };
 use age_plugin::{identity, Callbacks};
-use bech32::{ToBase32, Variant};
 use dialoguer::Password;
 use log::{debug, error, warn};
 use rand::rngs::SysRng;
@@ -29,7 +28,7 @@ use crate::{
     fl,
     recipient::{Recipient, RecipientLine, TAG_BYTES},
     util::{otp_serial_prefix, Metadata},
-    IDENTITY_PREFIX,
+    IdentityPrefix,
 };
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
@@ -393,16 +392,26 @@ pub fn manage(yubikey: &mut YubiKey) -> Result<(), Error> {
 /// corresponding recipient if the key is compatible with this plugin.
 pub fn list_slots(
     yubikey: &mut YubiKey,
+    identity_prefix: IdentityPrefix,
 ) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Option<Recipient>)>, Error> {
-    Ok(Key::list(yubikey)?.into_iter().filter_map(|key| {
-        // We only use the retired slots.
-        match key.slot() {
-            SlotId::Retired(slot) => {
-                // Only P-256 keys are compatible with us.
-                let recipient = Recipient::from_certificate(key.certificate());
-                Some((key, slot, recipient))
+    Ok(Key::list(yubikey)?.into_iter().filter_map({
+        let owned_identity_prefix = identity_prefix.clone();
+        move |key| {
+            // We only use the retired slots.
+            match key.slot() {
+                SlotId::Retired(slot) => {
+                    // Only P-256 keys are compatible with us.
+                    match Recipient::from_certificate(key.certificate()) {
+                        Some(recipient) => match (owned_identity_prefix, recipient.is_hybrid()) {
+                            (IdentityPrefix::Default, false) => Some((key, slot, Some(recipient))),
+                            (IdentityPrefix::TagPq, true) => Some((key, slot, Some(recipient))),
+                            _ => Some((key, slot, None)),
+                        },
+                        None => None,
+                    }
+                }
+                _ => None,
             }
-            _ => None,
         }
     }))
 }
@@ -410,8 +419,9 @@ pub fn list_slots(
 /// Returns an iterator of keys that are compatible with this plugin.
 pub fn list_compatible(
     yubikey: &mut YubiKey,
+    identity_prefix: IdentityPrefix,
 ) -> Result<impl Iterator<Item = (Key, RetiredSlotId, Recipient)>, Error> {
-    list_slots(yubikey)
+    list_slots(yubikey, identity_prefix)
         .map(|iter| iter.filter_map(|(key, slot, res)| res.map(|recipient| (key, slot, recipient))))
 }
 
@@ -422,19 +432,15 @@ pub struct Stub {
     pub slot: RetiredSlotId,
     pub tag: [u8; TAG_BYTES],
     pub identity_index: usize,
+    pub identity_prefix: IdentityPrefix,
 }
 
 impl fmt::Display for Stub {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            bech32::encode(
-                IDENTITY_PREFIX,
-                self.to_bytes().to_base32(),
-                Variant::Bech32,
-            )
-            .expect("HRP is valid")
-            .to_uppercase()
-            .as_str(),
+            bech32_encode(self.identity_prefix.hrp(), &self.to_bytes())
+                .to_uppercase()
+                .as_str(),
         )
     }
 }
@@ -451,15 +457,24 @@ impl Stub {
     /// Does not check that the `PublicKey` matches the given `(Serial, SlotId)` tuple;
     /// this is checked at decryption time.
     pub fn new(serial: Serial, slot: RetiredSlotId, recipient: &Recipient) -> Self {
+        let identity_prefix = recipient
+            .is_hybrid()
+            .then(|| IdentityPrefix::TagPq)
+            .unwrap_or_else(|| IdentityPrefix::Default);
         Stub {
             serial,
             slot,
             tag: recipient.static_tag(),
             identity_index: 0,
+            identity_prefix,
         }
     }
 
-    pub fn from_bytes(bytes: &[u8], identity_index: usize) -> Option<Self> {
+    pub fn from_bytes(
+        bytes: &[u8],
+        identity_index: usize,
+        identity_prefix: IdentityPrefix,
+    ) -> Option<Self> {
         if bytes.len() < 9 {
             return None;
         }
@@ -470,6 +485,7 @@ impl Stub {
             slot,
             tag: bytes[5..9].try_into().unwrap(),
             identity_index,
+            identity_prefix,
         })
     }
 

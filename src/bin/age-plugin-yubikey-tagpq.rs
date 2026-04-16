@@ -15,6 +15,7 @@ use age_plugin_yubikey::recipient::Recipient;
 use age_plugin_yubikey::*;
 
 const DEFAULT_TAG: Tag = Tag::MlKem768X25519Tag;
+const IDENTITY_PREFIX: IdentityPrefix = IdentityPrefix::TagPq;
 
 #[derive(Debug, Options)]
 struct PluginOptions {
@@ -150,7 +151,7 @@ fn print_single(
 ) -> Result<(), Error> {
     let mut yubikey = key::open(serial)?;
 
-    let (key, slot, recipient) = key::list_compatible(&mut yubikey)?
+    let (key, slot, recipient) = key::list_compatible(&mut yubikey, IDENTITY_PREFIX)?
         .find(|(_, s, _)| s == &slot)
         .ok_or(Error::SlotHasNoIdentity(slot))?;
 
@@ -181,7 +182,7 @@ fn print_multiple(
             }
         }
 
-        for (key, slot, recipient) in key::list_compatible(&mut yubikey)? {
+        for (key, slot, recipient) in key::list_compatible(&mut yubikey, IDENTITY_PREFIX)? {
             let stub = key::Stub::new(yubikey.serial(), slot, &recipient);
             let metadata = match util::Metadata::extract(&mut yubikey, slot, key.certificate(), all)
             {
@@ -356,7 +357,7 @@ fn main() -> Result<(), Error> {
             None => return Ok(()),
         };
 
-        let keys = key::list_slots(&mut yubikey)?.collect::<Vec<_>>();
+        let keys = key::list_slots(&mut yubikey, IDENTITY_PREFIX)?.collect::<Vec<_>>();
 
         // Identify slots that we can't allow the user to select.
         let slot_details: Vec<_> = USABLE_SLOTS

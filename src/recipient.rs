@@ -15,9 +15,34 @@ use crate::{
 };
 
 pub const TAG_BYTES: usize = 4;
-pub const RECIPIENT_PREFIX: &str = "age1yubikey";
-pub const TAGGED_RECIPIENT_PREFIX: &str = "age1tag";
+pub const RECIPIENT_PREFIX: bech32::Hrp = bech32::Hrp::parse_unchecked("age1yubikey");
 pub const ENCRYPTED_FILE_KEY_BYTES: usize = 32;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SupportedStanzaTag {
+    PivP256,
+    X25519,
+    MlKemX25519,
+}
+
+impl SupportedStanzaTag {
+    fn as_str(&self) -> &str {
+        match self {
+            SupportedStanzaTag::PivP256 => p256::STANZA_TAG,
+            SupportedStanzaTag::X25519 => x25519::STANZA_TAG,
+            SupportedStanzaTag::MlKemX25519 => native::STANZA_TAG,
+        }
+    }
+
+    fn try_from(s: &str) -> Option<Self> {
+        match s {
+            p256::STANZA_TAG => Some(Self::PivP256),
+            x25519::STANZA_TAG => Some(Self::X25519),
+            native::STANZA_TAG => Some(Self::MlKemX25519),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum PublicKey {
@@ -28,12 +53,16 @@ pub enum PublicKey {
 
 impl PublicKey {
     pub fn from_bytes(tag: &str, bytes: &[u8]) -> Option<Self> {
-        match tag {
-            x25519::STANZA_TAG => x25519::PublicKey::from_bytes(bytes).map(Self::X25519),
-            native::STANZA_TAG => native::EncappedKey::from_bytes(bytes)
+        match SupportedStanzaTag::try_from(tag) {
+            Some(SupportedStanzaTag::X25519) => {
+                x25519::PublicKey::from_bytes(bytes).map(Self::X25519)
+            }
+            Some(SupportedStanzaTag::MlKemX25519) => native::EncappedKey::from_bytes(bytes)
                 .ok()
                 .map(Self::MlKemX25519),
-            p256::STANZA_TAG => p256::PublicKey::from_bytes(bytes).map(Self::EccP256),
+            Some(SupportedStanzaTag::PivP256) => {
+                p256::PublicKey::from_bytes(bytes).map(Self::EccP256)
+            }
             _ => None,
         }
     }
@@ -87,9 +116,9 @@ impl EphemeralKeyBytes {
 
     pub fn tag(&self) -> String {
         match self.0 {
-            PublicKey::EccP256(_) => p256::STANZA_TAG.to_owned(),
-            PublicKey::X25519(_) => x25519::STANZA_TAG.to_owned(),
-            PublicKey::MlKemX25519(_) => native::STANZA_TAG.to_owned(),
+            PublicKey::EccP256(_) => SupportedStanzaTag::PivP256.as_str().to_owned(),
+            PublicKey::X25519(_) => SupportedStanzaTag::X25519.as_str().to_owned(),
+            PublicKey::MlKemX25519(_) => SupportedStanzaTag::MlKemX25519.as_str().to_owned(),
         }
     }
 }
@@ -116,17 +145,13 @@ impl From<RecipientLine> for Stanza {
 
 impl RecipientLine {
     pub(super) fn from_stanza(s: &Stanza) -> Option<Result<Self, ()>> {
-        let algorithm = match s.tag.as_str() {
-            p256::STANZA_TAG => Some(AlgorithmId::EccP256),
-            x25519::STANZA_TAG => Some(AlgorithmId::X25519),
-            _ => None,
-        };
-        if algorithm.is_none() && s.tag != native::STANZA_TAG {
+        let stanza = SupportedStanzaTag::try_from(s.tag.as_str());
+        if stanza.is_none() {
             return None;
         }
 
-        match algorithm {
-            Some(AlgorithmId::X25519) => {
+        match stanza {
+            Some(SupportedStanzaTag::X25519) => {
                 let (tag, epk_bytes) = match &s.args[..] {
                     [tag, epk_bytes] => {
                         let base64_bytes = base64_arg(epk_bytes, [0; x25519::EPK_BYTES]).unwrap();
@@ -148,7 +173,7 @@ impl RecipientLine {
                     _ => Err(()),
                 })
             }
-            Some(AlgorithmId::EccP256) => {
+            Some(SupportedStanzaTag::PivP256) => {
                 let (tag, epk_bytes) = match &s.args[..] {
                     [tag, epk_bytes] => {
                         let base64_bytes = base64_arg(epk_bytes, [0; p256::EPK_BYTES]).unwrap();
@@ -170,7 +195,7 @@ impl RecipientLine {
                     _ => Err(()),
                 })
             }
-            None => {
+            Some(SupportedStanzaTag::MlKemX25519) => {
                 let (tag, epk_bytes) = match &s.args[..] {
                     [tag, epk_bytes] => {
                         let base64_bytes = base64_arg(epk_bytes, [0; native::NENC]).unwrap();
@@ -218,16 +243,28 @@ impl fmt::Display for Recipient {
 }
 
 impl Recipient {
+    pub fn is_hybrid(&self) -> bool {
+        match self {
+            Recipient::MlKemX25519(_) => true,
+            _ => false,
+        }
+    }
+
     /// Attempts to parse a supported YubiKey recipient.
     pub fn from_bytes(plugin_name: &str, bytes: &[u8]) -> Option<Self> {
         match plugin_name {
             PLUGIN_NAME => {
                 if bytes.len() == 32 {
                     x25519::Recipient::from_bytes(bytes).map(Self::X25519)
-                } else if bytes.len() > 1000 {
-                    native::Recipient::from_bytes(bytes).map(Self::MlKemX25519)
                 } else {
                     p256::Recipient::from_bytes(bytes).map(Self::EccP256)
+                }
+            }
+            "yubikey-tagpq" => {
+                if bytes.len() == 1216 {
+                    native::Recipient::from_bytes(bytes).map(Self::MlKemX25519)
+                } else {
+                    None
                 }
             }
             _ => None,
@@ -282,7 +319,7 @@ impl Recipient {
         match self {
             Recipient::EccP256(recipient) => recipient.tag(),
             Recipient::X25519(recipient) => recipient.tag(),
-            Recipient::MlKemX25519(recipient) => static_tag(recipient.as_bytes()),
+            Recipient::MlKemX25519(recipient) => recipient.tag(),
         }
     }
 

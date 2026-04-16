@@ -22,7 +22,7 @@ use crate::{
     native::{self},
     recipient::Recipient,
     util::{Metadata, MlKem768Extension, UsagePolicies},
-    BINARY_NAME, USABLE_SLOTS,
+    USABLE_SLOTS,
 };
 
 pub const DEFAULT_TAG: Tag = Tag::PivP256;
@@ -244,11 +244,13 @@ impl IdentityBuilder {
             eprintln!("{}", fl!("builder-touch-yk"));
         }
 
+        let binary_name = stub.identity_prefix.as_str().strip_suffix("-").unwrap();
+
         // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
         match (tag, algorithm) {
             (Tag::MlKem768X25519Tag, AlgorithmId::X25519) => {
                 let kem_key = native::Kem::new();
-                let kem_policy = MlKem768Extension::from(kem_key.dk.seed());
+                let kem_policy = MlKem768Extension::from_bytes(kem_key.dk.as_bytes());
                 let keys = Key::list(yubikey)?;
                 let attest_key = keys
                     .iter()
@@ -257,7 +259,7 @@ impl IdentityBuilder {
                 let mut builder = CertificateBuilder::new(
                     SelfSigned {
                         subject: format!(
-                            "O={BINARY_NAME},OU={},CN={name}",
+                            "O={binary_name},OU={},CN={name}",
                             env!("CARGO_PKG_VERSION")
                         )
                         .parse()
@@ -280,7 +282,7 @@ impl IdentityBuilder {
                 builder
                     .add_extension(&kem_policy)
                     .map_err(|e| match e {
-                        e => panic!("Cannot add ML-KEM seed to certificate"),
+                        _ => panic!("Cannot add ML-KEM seed to certificate"),
                     })
                     .unwrap();
                 let signer = yubikey_signer::Signer::<
@@ -328,7 +330,7 @@ impl IdentityBuilder {
                         x509_cert::time::Time::INFINITY,
                     ),
                     // TODO: https://github.com/RustCrypto/formats/issues/1489
-                    format!("O={BINARY_NAME},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
+                    format!("O={binary_name},OU={},CN={name}", env!("CARGO_PKG_VERSION"))
                         .parse()
                         .map_err(Error::Build)?,
                     generated,

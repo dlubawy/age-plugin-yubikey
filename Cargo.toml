@@ -25,7 +25,7 @@ assets = [
 age-core = "0.11"
 age-plugin = "0.6"
 base64 = "0.21"
-bech32 = "0.9"
+bech32 = "0.11.1"
 chrono = "0.4"
 console = { version = "0.15", default-features = false }
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
@@ -67,5 +67,5 @@ test-with = "0.11"
 which = "5"
 
 [patch.crates-io]
-age-core = { git = "https://github.com/str4d/rage.git", rev = "cf04ea79ab74f4fdbfbe5b4ed7d0fb72c9c1da4d" }
-age-plugin = { git = "https://github.com/str4d/rage.git", rev = "cf04ea79ab74f4fdbfbe5b4ed7d0fb72c9c1da4d" }
+age-core = { git = "https://github.com/str4d/rage.git", rev = "6db6ca4e4a5451eab4ab25c80df05c658c335915" }
+age-plugin = { git = "https://github.com/str4d/rage.git", rev = "6db6ca4e4a5451eab4ab25c80df05c658c335915" }

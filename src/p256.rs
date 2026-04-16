@@ -1,5 +1,8 @@
-use age_core::{format::FileKey, primitives::aead_encrypt, secrecy::ExposeSecret};
-use bech32::{ToBase32, Variant};
+use age_core::{
+    format::FileKey,
+    primitives::{aead_encrypt, bech32_encode},
+    secrecy::ExposeSecret,
+};
 use p256::{
     elliptic_curve::{
         common::Generate,
@@ -65,15 +68,7 @@ impl fmt::Debug for Recipient {
 
 impl fmt::Display for Recipient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(
-            bech32::encode(
-                RECIPIENT_PREFIX,
-                self.to_encoded().as_bytes().to_base32(),
-                Variant::Bech32,
-            )
-            .expect("HRP is valid")
-            .as_str(),
-        )
+        f.write_str(bech32_encode(RECIPIENT_PREFIX, self.to_encoded().as_bytes()).as_str())
     }
 }
 
