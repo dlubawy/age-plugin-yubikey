@@ -418,54 +418,6 @@ impl KemTrait for MlKem768X25519 {
 
 pub struct YubiKeyMlKem768X25519<'a>(PhantomData<&'a ()>);
 
-// impl<'a> Kem<'a> {
-//     pub fn new(connection: Option<Connection>) -> Self {
-//         let mut csprng = rand::rng();
-//         let (dk, ek) = Kem::gen_keypair(&mut csprng);
-//         match connection {
-//             Some(connection) => {
-//                 let dk = YubiKeyPrivateKey::new(connection, dk.as_bytes());
-//                 Self { ek, dk }
-//             }
-//             None => Self { ek, dk },
-//         }
-//     }
-//
-//     pub fn try_from_certificate(cert: &Certificate) -> Result<Self, hpke::HpkeError> {
-//         match cert
-//             .cert
-//             .tbs_certificate()
-//             .get_extension::<MlKem768Extension>()
-//             .expect("decode extension")
-//             .expect("Kem seed")
-//         {
-//             (false, ext) => {
-//                 let seed: &[u8; NSK] = ext.as_bytes();
-//                 let expanded_key: ExpandedKey = ExpandedKey::from(seed);
-//                 let ek_t_data: [u8; GROUP_NELEM] = cert
-//                     .subject_pki()
-//                     .subject_public_key
-//                     .raw_bytes()
-//                     .try_into()
-//                     .expect("invalid spki");
-//                 let ek_t = x25519_dalek::PublicKey::from(ek_t_data);
-//                 let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
-//                 let dk = YubiKeyPrivateKey::from_bytes(seed).unwrap();
-//                 Ok(Self { ek, dk })
-//             }
-//             _ => Err(hpke::HpkeError::InvalidPskBundle),
-//         }
-//     }
-//
-//     pub fn from(seed: &[u8; NSK], ek_t_bytes: &[u8; GROUP_NELEM]) -> Self {
-//         let dk = YubiKeyPrivateKey::from_bytes(seed).expect("seed length");
-//         let expanded_key: ExpandedKey = dk.expand_key();
-//         let ek_t = x25519_dalek::PublicKey::from(ek_t_bytes.to_owned());
-//         let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
-//         Self { ek, dk }
-//     }
-// }
-
 impl<'a> KemTrait for YubiKeyMlKem768X25519<'a> {
     type PublicKey = PublicKey;
     type PrivateKey = YubiKeyPrivateKey<'a, MlKem768X25519>;
@@ -576,16 +528,8 @@ impl Recipient {
         Some(Self(ek))
     }
 
-    pub fn from_spki(spki: &SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
-        let pk_data: [u8; NPK] = spki
-            .subject_public_key
-            .raw_bytes()
-            .try_into()
-            .expect("invalid spki");
-        match PublicKey::from_bytes(&pk_data) {
-            Ok(pk) => Some(Self(pk)),
-            _ => None,
-        }
+    pub fn from_spki(_: &SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
+        unreachable!("Never used")
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -597,7 +541,8 @@ impl Recipient {
     }
 
     pub fn tag(&self, enc: &[u8]) -> [u8; TAG_BYTES] {
-        dynamic_tag(self.0.ek_t.as_bytes(), enc)
+        let pk = self.static_tag();
+        dynamic_tag(&pk, enc)
     }
 
     /// Exposes the wrapped public key.
