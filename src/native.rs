@@ -1,19 +1,19 @@
 use age_core::{format::FileKey, primitives::bech32_encode_to_fmt, secrecy::ExposeSecret};
 use hpke::{Deserializable, Kem as KemTrait, Serializable};
 use ml_kem::{kem::Decapsulate, ml_kem_768, Encapsulate, FromSeed, KeyExport, TryKeyInit};
-use sha2::{Digest, Sha256};
 use sha3::{
     digest::{Digest as Sha3Digest, ExtendableOutput, FixedOutput, Update, XofReader},
     Sha3_256, Shake256,
 };
 use typenum::{UInt, UTerm, Unsigned, B0, B1, U32};
 use x509_cert::spki::SubjectPublicKeyInfoRef;
-use yubikey::Certificate;
+use yubikey::{piv::AlgorithmId, Certificate};
 
-use std::fmt;
+use std::{fmt, marker::PhantomData, rc::Rc, sync::RwLock};
 
 use crate::{
-    recipient::{EphemeralKeyBytes, RecipientLine, TAG_BYTES},
+    key::Connection,
+    recipient::{dynamic_tag, static_tag, EphemeralKeyBytes, RecipientLine, TAG_BYTES},
     util::MlKem768Extension,
 };
 
@@ -33,12 +33,12 @@ pub const LABEL: &[u8] = b"\\.//^\\";
 pub const RECIPIENT_PREFIX: bech32::Hrp = bech32::Hrp::parse_unchecked("age1tagpq");
 
 fn hpke_seal<R: hpke::rand_core::CryptoRng + hpke::rand_core::Rng>(
-    pk_recip: &<Kem as KemTrait>::PublicKey,
+    pk_recip: &<MlKem768X25519 as KemTrait>::PublicKey,
     info: &[u8],
     plaintext: &[u8],
     rng: &mut R,
 ) -> (EncappedKey, Vec<u8>) {
-    hpke::single_shot_seal::<hpke::aead::ChaCha20Poly1305, hpke::kdf::HkdfSha256, Kem, R>(
+    hpke::single_shot_seal::<hpke::aead::ChaCha20Poly1305, hpke::kdf::HkdfSha256, MlKem768X25519, R>(
         &hpke::OpModeS::Base,
         pk_recip,
         info,
@@ -49,11 +49,27 @@ fn hpke_seal<R: hpke::rand_core::CryptoRng + hpke::rand_core::Rng>(
     .expect("no errors should occur with these HPKE parameters")
 }
 
+pub fn hpke_open<Kem: KemTrait>(
+    encapped_key: &Kem::EncappedKey,
+    sk_recip: &Kem::PrivateKey,
+    info: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, hpke::HpkeError> {
+    hpke::single_shot_open::<hpke::aead::ChaCha20Poly1305, hpke::kdf::HkdfSha256, Kem>(
+        &hpke::OpModeR::Base,
+        sk_recip,
+        encapped_key,
+        info,
+        ciphertext,
+        &[],
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct PublicKey {
     ek: [u8; NPK],
-    pub ek_pq: ml_kem_768::EncapsulationKey,
-    pub ek_t: x25519_dalek::PublicKey,
+    ek_pq: ml_kem_768::EncapsulationKey,
+    ek_t: x25519_dalek::PublicKey,
 }
 
 impl PublicKey {
@@ -68,7 +84,7 @@ impl PublicKey {
         }
     }
 
-    pub fn as_bytes(&self) -> &[u8; NPK] {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.ek
     }
 }
@@ -148,21 +164,42 @@ impl ExpandedKey {
 }
 
 #[derive(Clone)]
-pub struct PrivateKey([u8; NSK]);
+pub struct PrivateKey {
+    seed: [u8; NSK],
+    dk_pq: ml_kem_768::DecapsulationKey,
+    dk_t: x25519_dalek::StaticSecret,
+}
 
 impl PrivateKey {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.seed
     }
 
-    pub(crate) fn expand_key(&self) -> ExpandedKey {
-        ExpandedKey::from(&self.0)
+    pub fn try_from_certificate(cert: &Certificate) -> Result<Self, hpke::HpkeError> {
+        match cert
+            .cert
+            .tbs_certificate()
+            .get_extension::<MlKem768Extension>()
+            .expect("decode extension")
+            .expect("Kem seed")
+        {
+            (false, ext) => {
+                let seed: &[u8; NSK] = ext.as_bytes();
+                let expanded_key: ExpandedKey = ExpandedKey::from(seed);
+                Ok(Self {
+                    seed: seed.clone(),
+                    dk_pq: expanded_key.dk_pq,
+                    dk_t: expanded_key.dk_t,
+                })
+            }
+            _ => Err(hpke::HpkeError::InvalidPskBundle),
+        }
     }
 }
 
 impl PartialEq for PrivateKey {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.seed == other.seed
     }
 }
 
@@ -173,14 +210,64 @@ impl Deserializable for PrivateKey {
         let seed: [u8; NSK] = encoded.try_into().map_err(|_| {
             hpke::HpkeError::IncorrectInputLength(Self::OutputSize::to_usize(), encoded.len())
         })?;
-        Ok(Self(seed))
+        let expanded_key = ExpandedKey::from(&seed);
+        Ok(Self {
+            seed,
+            dk_pq: expanded_key.dk_pq,
+            dk_t: expanded_key.dk_t,
+        })
     }
 }
 
 impl Serializable for PrivateKey {
     type OutputSize = U32;
+
     fn write_exact(&self, buf: &mut [u8]) {
-        buf.copy_from_slice(&self.0);
+        buf.copy_from_slice(&self.seed);
+    }
+}
+
+pub struct YubiKeyPrivateKey<'a, Kem> {
+    pub connection: Rc<RwLock<&'a mut Connection>>,
+    _kem: PhantomData<Kem>,
+}
+
+impl<'a, Kem> Clone for YubiKeyPrivateKey<'a, Kem> {
+    fn clone(&self) -> Self {
+        Self {
+            connection: self.connection.clone(),
+            _kem: PhantomData::default(),
+        }
+    }
+}
+
+impl<'a, Kem> YubiKeyPrivateKey<'a, Kem> {
+    pub fn new(connection: &'a mut Connection) -> Self {
+        Self {
+            connection: Rc::new(RwLock::new(connection)),
+            _kem: PhantomData::default(),
+        }
+    }
+}
+
+impl<'a, KemTrait> PartialEq for YubiKeyPrivateKey<'a, KemTrait> {
+    fn eq(&self, other: &Self) -> bool {
+        self.connection.read().unwrap().stub() == other.connection.read().unwrap().stub()
+    }
+}
+
+impl<'a, Kem> Eq for YubiKeyPrivateKey<'a, Kem> {}
+
+impl<'a, Kem> Deserializable for YubiKeyPrivateKey<'a, Kem> {
+    fn from_bytes(_: &[u8]) -> Result<Self, hpke::HpkeError> {
+        unreachable!("Never called")
+    }
+}
+
+impl<'a, Kem> Serializable for YubiKeyPrivateKey<'a, Kem> {
+    type OutputSize = U32;
+    fn write_exact(&self, _: &mut [u8]) {
+        unreachable!("Never called")
     }
 }
 
@@ -221,55 +308,9 @@ impl Serializable for EncappedKey {
     }
 }
 
-#[derive(Clone)]
-pub struct Kem {
-    pub ek: PublicKey,
-    pub dk: PrivateKey,
-}
+pub struct MlKem768X25519;
 
-impl Kem {
-    pub fn new() -> Kem {
-        let mut csprng = rand::rng();
-        let (dk, ek) = Kem::gen_keypair(&mut csprng);
-        Self { ek, dk }
-    }
-
-    pub fn try_from_certificate(cert: &Certificate) -> Result<Self, hpke::HpkeError> {
-        match cert
-            .cert
-            .tbs_certificate()
-            .get_extension::<MlKem768Extension>()
-            .expect("decode extension")
-            .expect("Kem seed")
-        {
-            (false, ext) => {
-                let seed: &[u8; NSK] = ext.as_bytes();
-                let expanded_key: ExpandedKey = ExpandedKey::from(seed);
-                let ek_t_data: [u8; GROUP_NELEM] = cert
-                    .subject_pki()
-                    .subject_public_key
-                    .raw_bytes()
-                    .try_into()
-                    .expect("invalid spki");
-                let ek_t = x25519_dalek::PublicKey::from(ek_t_data);
-                let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
-                let dk = PrivateKey::from_bytes(seed).unwrap();
-                Ok(Self { ek, dk })
-            }
-            _ => Err(hpke::HpkeError::InvalidPskBundle),
-        }
-    }
-
-    pub fn from(seed: &[u8; NSK], ek_t_bytes: &[u8; GROUP_NELEM]) -> Self {
-        let dk = PrivateKey::from_bytes(seed).expect("seed length");
-        let expanded_key: ExpandedKey = dk.expand_key();
-        let ek_t = x25519_dalek::PublicKey::from(ek_t_bytes.to_owned());
-        let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
-        Self { ek, dk }
-    }
-}
-
-impl KemTrait for Kem {
+impl KemTrait for MlKem768X25519 {
     type PublicKey = PublicKey;
     type PrivateKey = PrivateKey;
     type EncappedKey = EncappedKey;
@@ -278,7 +319,8 @@ impl KemTrait for Kem {
     const KEM_ID: u16 = 0x647a;
 
     fn sk_to_pk(sk: &Self::PrivateKey) -> Self::PublicKey {
-        let expanded_key: ExpandedKey = sk.expand_key();
+        let seed: [u8; NSK] = sk.as_bytes().try_into().expect("correct length");
+        let expanded_key = ExpandedKey::from(&seed);
         PublicKey::from(expanded_key.ek_pq, expanded_key.ek_t)
     }
 
@@ -300,7 +342,7 @@ impl KemTrait for Kem {
             .finalize_xof_into(&mut seed);
 
         let dk = PrivateKey::from_bytes(&seed).expect("private key");
-        let ek = Kem::sk_to_pk(&dk);
+        let ek = Self::sk_to_pk(&dk);
         (dk, ek)
     }
 
@@ -312,7 +354,7 @@ impl KemTrait for Kem {
             .try_fill_bytes(&mut seed)
             .expect("seed of proper length");
         let dk = PrivateKey::from_bytes(&seed).expect("private key");
-        let ek = Kem::sk_to_pk(&dk);
+        let ek = Self::sk_to_pk(&dk);
         (dk, ek)
     }
 
@@ -324,17 +366,17 @@ impl KemTrait for Kem {
         encapped_key: &Self::EncappedKey,
     ) -> Result<hpke::kem::SharedSecret<Self>, hpke::HpkeError> {
         let encapped_key_bytes = encapped_key.to_bytes();
-        let ct_pq_bytes: [u8; KEM_NCT] =
-            encapped_key_bytes[..KEM_NCT].try_into().expect("ct length");
+        let ct_pq_bytes: [u8; KEM_NCT] = encapped_key_bytes[..KEM_NCT]
+            .try_into()
+            .expect("ct_pq length");
         let ct_pq: ml_kem::Ciphertext<ml_kem::MlKem768> = ct_pq_bytes.into();
-        let ct_t_bytes: [u8; GROUP_NELEM] =
-            encapped_key_bytes[KEM_NCT..].try_into().expect("ct length");
+        let ct_t_bytes: [u8; GROUP_NELEM] = encapped_key_bytes[KEM_NCT..]
+            .try_into()
+            .expect("ct_t length");
         let ct_t = x25519_dalek::PublicKey::from(ct_t_bytes);
 
-        let expanded_key: ExpandedKey = sk_recip.expand_key();
-
-        let ss_pq = expanded_key.dk_pq.decapsulate(&ct_pq);
-        let ss_t = expanded_key.dk_t.diffie_hellman(&ct_t);
+        let ss_pq = sk_recip.dk_pq.decapsulate(&ct_pq);
+        let ss_t = sk_recip.dk_t.diffie_hellman(&ct_t);
 
         let mut ss_hash = Sha3_256::default();
         Sha3Digest::update(&mut ss_hash, &ss_pq);
@@ -374,6 +416,124 @@ impl KemTrait for Kem {
     }
 }
 
+pub struct YubiKeyMlKem768X25519<'a>(PhantomData<&'a ()>);
+
+// impl<'a> Kem<'a> {
+//     pub fn new(connection: Option<Connection>) -> Self {
+//         let mut csprng = rand::rng();
+//         let (dk, ek) = Kem::gen_keypair(&mut csprng);
+//         match connection {
+//             Some(connection) => {
+//                 let dk = YubiKeyPrivateKey::new(connection, dk.as_bytes());
+//                 Self { ek, dk }
+//             }
+//             None => Self { ek, dk },
+//         }
+//     }
+//
+//     pub fn try_from_certificate(cert: &Certificate) -> Result<Self, hpke::HpkeError> {
+//         match cert
+//             .cert
+//             .tbs_certificate()
+//             .get_extension::<MlKem768Extension>()
+//             .expect("decode extension")
+//             .expect("Kem seed")
+//         {
+//             (false, ext) => {
+//                 let seed: &[u8; NSK] = ext.as_bytes();
+//                 let expanded_key: ExpandedKey = ExpandedKey::from(seed);
+//                 let ek_t_data: [u8; GROUP_NELEM] = cert
+//                     .subject_pki()
+//                     .subject_public_key
+//                     .raw_bytes()
+//                     .try_into()
+//                     .expect("invalid spki");
+//                 let ek_t = x25519_dalek::PublicKey::from(ek_t_data);
+//                 let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
+//                 let dk = YubiKeyPrivateKey::from_bytes(seed).unwrap();
+//                 Ok(Self { ek, dk })
+//             }
+//             _ => Err(hpke::HpkeError::InvalidPskBundle),
+//         }
+//     }
+//
+//     pub fn from(seed: &[u8; NSK], ek_t_bytes: &[u8; GROUP_NELEM]) -> Self {
+//         let dk = YubiKeyPrivateKey::from_bytes(seed).expect("seed length");
+//         let expanded_key: ExpandedKey = dk.expand_key();
+//         let ek_t = x25519_dalek::PublicKey::from(ek_t_bytes.to_owned());
+//         let ek = PublicKey::from(expanded_key.ek_pq, ek_t);
+//         Self { ek, dk }
+//     }
+// }
+
+impl<'a> KemTrait for YubiKeyMlKem768X25519<'a> {
+    type PublicKey = PublicKey;
+    type PrivateKey = YubiKeyPrivateKey<'a, MlKem768X25519>;
+    type EncappedKey = EncappedKey;
+    type NSecret = U32;
+
+    const KEM_ID: u16 = 0x647a;
+
+    fn sk_to_pk(_: &Self::PrivateKey) -> Self::PublicKey {
+        unreachable!("Never used")
+    }
+
+    fn derive_keypair(_: &[u8]) -> (Self::PrivateKey, Self::PublicKey) {
+        unreachable!("Never used")
+    }
+
+    // NOTE: for implementation only
+    // decap should happen from key
+    fn decap(
+        sk_recip: &Self::PrivateKey,
+        _pk_sender_id: Option<&Self::PublicKey>,
+        encapped_key: &Self::EncappedKey,
+    ) -> Result<hpke::kem::SharedSecret<Self>, hpke::HpkeError> {
+        let mut sk_recip = sk_recip.connection.write().unwrap();
+        let dk_pq = PrivateKey::try_from_certificate(sk_recip.get_cert())
+            .expect("dk_pq from cert")
+            .dk_pq;
+
+        let encapped_key_bytes = encapped_key.to_bytes();
+        let ct_pq_bytes: [u8; KEM_NCT] =
+            encapped_key_bytes[..KEM_NCT].try_into().expect("ct length");
+        let ct_pq: ml_kem::Ciphertext<ml_kem::MlKem768> = ct_pq_bytes.into();
+        let ct_t: [u8; GROUP_NELEM] = encapped_key_bytes[KEM_NCT..].try_into().expect("ct length");
+
+        let ss_pq = dk_pq.decapsulate(&ct_pq);
+        let ss_t = match sk_recip.decrypt_data(&ct_t, AlgorithmId::X25519) {
+            Ok(res) => res,
+            Err(_) => return Err(hpke::HpkeError::DecapError),
+        };
+
+        let ek_t_bytes = sk_recip
+            .get_cert()
+            .cert
+            .tbs_certificate()
+            .subject_public_key_info()
+            .subject_public_key
+            .as_bytes()
+            .unwrap();
+
+        let mut ss_hash = Sha3_256::default();
+        Sha3Digest::update(&mut ss_hash, &ss_pq);
+        Sha3Digest::update(&mut ss_hash, &ss_t);
+        Sha3Digest::update(&mut ss_hash, &ct_t);
+        Sha3Digest::update(&mut ss_hash, &ek_t_bytes);
+        Sha3Digest::update(&mut ss_hash, LABEL);
+        let ss = hpke::kem::SharedSecret(ss_hash.finalize_fixed());
+        Ok(ss)
+    }
+
+    fn encap<R: rand::rand_core::CryptoRng + rand::rand_core::Rng>(
+        _: &Self::PublicKey,
+        _sender_id_keypair: Option<(&Self::PrivateKey, &Self::PublicKey)>,
+        _: &mut R,
+    ) -> Result<(hpke::kem::SharedSecret<Self>, Self::EncappedKey), hpke::HpkeError> {
+        unreachable!("Never called")
+    }
+}
+
 #[derive(Clone)]
 pub struct Recipient(PublicKey);
 
@@ -400,10 +560,20 @@ impl Recipient {
     }
 
     pub fn from_certificate(cert: &Certificate) -> Option<Self> {
-        match Kem::try_from_certificate(cert) {
-            Ok(kem) => Some(Self(kem.ek)),
-            _ => None,
-        }
+        let dk = PrivateKey::try_from_certificate(cert).expect("dk from cert");
+        let expanded_key = ExpandedKey::from(&dk.seed);
+
+        let mut ek_bytes: [u8; NPK] = [0; NPK];
+        ek_bytes[..KEM_NEK].copy_from_slice(&expanded_key.ek_pq.to_bytes());
+        ek_bytes[KEM_NEK..].copy_from_slice(
+            cert.cert
+                .tbs_certificate()
+                .subject_public_key_info()
+                .subject_public_key
+                .raw_bytes(),
+        );
+        let ek = PublicKey::from_bytes(&ek_bytes).expect("ek from bytes");
+        Some(Self(ek))
     }
 
     pub fn from_spki(spki: &SubjectPublicKeyInfoRef<'_>) -> Option<Self> {
@@ -422,16 +592,12 @@ impl Recipient {
         self.0.as_bytes()
     }
 
-    pub fn tag(&self) -> [u8; TAG_BYTES] {
-        Sha256::digest(self.0.ek_t.as_bytes())[0..TAG_BYTES]
-            .try_into()
-            .expect("correct tag length")
-        // let mut ikm: [u8; NENC + TAG_BYTES] = [0; NENC + TAG_BYTES];
-        // ikm[..NENC].copy_from_slice(&enc.as_bytes()[..NENC]);
-        // ikm[NENC..].copy_from_slice(&encoded_pk[..TAG_BYTES]);
-        // hkdf(STANZA_KEY_LABEL, b"", &ikm)[..TAG_BYTES]
-        //     .try_into()
-        //     .expect("correct tag length")
+    pub fn static_tag(&self) -> [u8; TAG_BYTES] {
+        static_tag(self.0.ek_t.as_bytes())
+    }
+
+    pub fn tag(&self, enc: &[u8]) -> [u8; TAG_BYTES] {
+        dynamic_tag(self.0.ek_t.as_bytes(), enc)
     }
 
     /// Exposes the wrapped public key.
@@ -447,7 +613,7 @@ impl Recipient {
             file_key.expose_secret(),
             &mut csprng,
         );
-        let tag = self.tag();
+        let tag = self.tag(&enc.as_bytes());
 
         let epk_bytes =
             EphemeralKeyBytes::from_public_key(crate::recipient::PublicKey::MlKemX25519(enc));

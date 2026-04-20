@@ -1,6 +1,7 @@
 use std::time::SystemTime;
 
 use dialoguer::Password;
+use hpke::Kem;
 use spki::{der::referenced::OwnedToRef, SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef};
 use x509_cert::{
     builder::{profile::BuilderProfile, Builder, CertificateBuilder},
@@ -249,8 +250,9 @@ impl IdentityBuilder {
         // TODO: https://github.com/iqlusioninc/yubikey.rs/issues/581
         match (tag, algorithm) {
             (Tag::MlKem768X25519Tag, AlgorithmId::X25519) => {
-                let kem_key = native::Kem::new();
-                let kem_policy = MlKem768Extension::from_bytes(kem_key.dk.as_bytes());
+                let mut csprng = rand::rng();
+                let (dk, _ek) = native::MlKem768X25519::gen_keypair(&mut csprng);
+                let kem_policy = MlKem768Extension::from_bytes(dk.as_bytes());
                 let keys = Key::list(yubikey)?;
                 let attest_key = keys
                     .iter()

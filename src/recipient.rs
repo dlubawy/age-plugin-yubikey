@@ -2,6 +2,7 @@ use std::{fmt, usize};
 
 use age_core::format::{FileKey, Stanza};
 use base64::prelude::{Engine, BASE64_STANDARD_NO_PAD};
+use hkdf::Hkdf;
 use hpke::Deserializable;
 use sha2::{Digest, Sha256};
 use x509_cert::spki::SubjectPublicKeyInfoRef;
@@ -267,6 +268,13 @@ impl Recipient {
                     None
                 }
             }
+            "tagpq" => {
+                if bytes.len() == 1216 {
+                    native::Recipient::from_bytes(bytes).map(Self::MlKemX25519)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -319,7 +327,15 @@ impl Recipient {
         match self {
             Recipient::EccP256(recipient) => recipient.tag(),
             Recipient::X25519(recipient) => recipient.tag(),
-            Recipient::MlKemX25519(recipient) => recipient.tag(),
+            Recipient::MlKemX25519(recipient) => recipient.static_tag(),
+        }
+    }
+
+    pub fn dynamic_tag(&self, enc: &[u8]) -> [u8; TAG_BYTES] {
+        match self {
+            Recipient::EccP256(recipient) => recipient.tag(),
+            Recipient::X25519(recipient) => recipient.tag(),
+            Recipient::MlKemX25519(recipient) => recipient.tag(enc),
         }
     }
 
@@ -336,4 +352,14 @@ pub fn static_tag(pk: &[u8]) -> [u8; TAG_BYTES] {
     Sha256::digest(pk)[0..TAG_BYTES]
         .try_into()
         .expect("length is correct")
+}
+
+pub fn dynamic_tag(pk: &[u8], enc: &[u8]) -> [u8; TAG_BYTES] {
+    let mut ikm = Vec::new();
+    ikm.resize(enc.len() + TAG_BYTES, 0);
+    ikm[..enc.len()].copy_from_slice(&enc);
+    ikm[enc.len()..].copy_from_slice(&pk);
+
+    let (tag, _) = Hkdf::<Sha256>::extract(Some(native::STANZA_KEY_LABEL), &ikm);
+    tag[..TAG_BYTES].try_into().expect("correct length")
 }

@@ -7,9 +7,10 @@ use age_core::{
 };
 use age_plugin::{identity, Callbacks};
 use dialoguer::Password;
+use hpke::Deserializable;
 use log::{debug, error, warn};
 use rand::rngs::SysRng;
-use spki::der::zeroize::Zeroize;
+use spki::der::zeroize::{Zeroize, Zeroizing};
 use std::fmt;
 use std::io;
 use std::iter;
@@ -26,7 +27,8 @@ use yubikey::{
 use crate::{
     error::Error,
     fl,
-    recipient::{Recipient, RecipientLine, TAG_BYTES},
+    native::{self, MlKem768X25519, STANZA_KEY_LABEL},
+    recipient::{dynamic_tag, Recipient, RecipientLine, TAG_BYTES},
     util::{otp_serial_prefix, Metadata},
     IdentityPrefix,
 };
@@ -656,6 +658,14 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub fn stub(&self) -> Stub {
+        Stub::new(self.yubikey.serial(), self.slot, &self.pk)
+    }
+
+    pub fn get_cert(&self) -> &Certificate {
+        &self.cert
+    }
+
     pub fn recipient(&self) -> &Recipient {
         &self.pk
     }
@@ -718,8 +728,25 @@ impl Connection {
         Ok(Ok(()))
     }
 
+    pub fn decrypt_data(
+        &mut self,
+        ct: &[u8],
+        algorithm: AlgorithmId,
+    ) -> Result<Zeroizing<Vec<u8>>, ()> {
+        match decrypt_data(&mut self.yubikey, ct, algorithm, SlotId::Retired(self.slot)) {
+            Ok(res) => Ok(res),
+            Err(_) => return Err(()),
+        }
+    }
+
     pub fn unwrap_file_key(&mut self, line: &RecipientLine) -> Result<FileKey, ()> {
-        assert_eq!(self.tag, line.tag);
+        match line.epk_bytes.tag().as_str() {
+            native::STANZA_TAG => {
+                let tag = dynamic_tag(&self.tag, line.epk_bytes.as_bytes());
+                assert_eq!(line.tag, tag)
+            }
+            _ => assert_eq!(self.tag, line.tag),
+        }
 
         let algorithm = line.epk_bytes.algorithm();
 
@@ -737,47 +764,16 @@ impl Connection {
             Some(pk) => pk.as_bytes().to_owned(),
             None => line.epk_bytes.as_bytes().to_vec(),
         };
-        // The YubiKey API for performing scalar multiplication takes the point in its
-        // uncompressed SEC-1 encoding.
-        let shared_secret = match decrypt_data(
-            &mut self.yubikey,
-            &epk_bytes,
-            algorithm,
-            SlotId::Retired(self.slot),
-        ) {
-            Ok(res) => res,
-            Err(_) => return Err(()),
-        };
 
-        // If we requested a touch and reached here, the user touched the YubiKey.
-        if needs_touch {
-            if let Some(TouchPolicy::Cached) =
-                self.cached_metadata.as_ref().and_then(|m| m.touch_policy)
-            {
-                self.last_touch = Some(Instant::now());
-            }
-        }
-
-        let pk_bytes = match self.pk.to_encoded() {
-            Some(pk_bytes) => pk_bytes,
-            None => self.pk.as_bytes().to_vec(),
-        };
-        let mut salt = vec![];
-        salt.extend_from_slice(line.epk_bytes.as_bytes());
-        salt.extend_from_slice(&pk_bytes);
-
-        let enc_key = match algorithm {
-            AlgorithmId::X25519 => hkdf(
-                &salt,
-                crate::x25519::STANZA_KEY_LABEL,
-                shared_secret.as_ref(),
-            ),
-            _ => hkdf(&salt, crate::p256::STANZA_KEY_LABEL, shared_secret.as_ref()),
-        };
-
-        // A failure to decrypt is fatal, because we assume that we won't
-        // encounter 32-bit collisions on the key tag embedded in the header.
-        aead_decrypt(&enc_key, FILE_KEY_BYTES, &line.encrypted_file_key)
+        if epk_bytes.len() == native::NENC {
+            let kem = native::YubiKeyPrivateKey::<MlKem768X25519>::new(self);
+            let enc = native::EncappedKey::from_bytes(line.epk_bytes.as_bytes()).unwrap();
+            native::hpke_open::<native::YubiKeyMlKem768X25519>(
+                &enc,
+                &kem,
+                STANZA_KEY_LABEL,
+                &line.encrypted_file_key,
+            )
             .map_err(|_| ())
             .map(|mut pt| {
                 FileKey::init_with_mut(|file_key| {
@@ -785,6 +781,56 @@ impl Connection {
                     pt.zeroize();
                 })
             })
+        } else {
+            // The YubiKey API for performing scalar multiplication takes the point in its
+            // uncompressed SEC-1 encoding.
+            let shared_secret = match decrypt_data(
+                &mut self.yubikey,
+                &epk_bytes,
+                algorithm,
+                SlotId::Retired(self.slot),
+            ) {
+                Ok(res) => res,
+                Err(_) => return Err(()),
+            };
+
+            // If we requested a touch and reached here, the user touched the YubiKey.
+            if needs_touch {
+                if let Some(TouchPolicy::Cached) =
+                    self.cached_metadata.as_ref().and_then(|m| m.touch_policy)
+                {
+                    self.last_touch = Some(Instant::now());
+                }
+            }
+
+            let pk_bytes = match self.pk.to_encoded() {
+                Some(pk_bytes) => pk_bytes,
+                None => self.pk.as_bytes().to_vec(),
+            };
+            let mut salt = vec![];
+            salt.extend_from_slice(line.epk_bytes.as_bytes());
+            salt.extend_from_slice(&pk_bytes);
+
+            let enc_key = match algorithm {
+                AlgorithmId::X25519 => hkdf(
+                    &salt,
+                    crate::x25519::STANZA_KEY_LABEL,
+                    shared_secret.as_ref(),
+                ),
+                _ => hkdf(&salt, crate::p256::STANZA_KEY_LABEL, shared_secret.as_ref()),
+            };
+
+            // A failure to decrypt is fatal, because we assume that we won't
+            // encounter 32-bit collisions on the key tag embedded in the header.
+            aead_decrypt(&enc_key, FILE_KEY_BYTES, &line.encrypted_file_key)
+                .map_err(|_| ())
+                .map(|mut pt| {
+                    FileKey::init_with_mut(|file_key| {
+                        file_key.copy_from_slice(&pt);
+                        pt.zeroize();
+                    })
+                })
+        }
     }
 
     /// Close this connection without resetting the YubiKey.
@@ -808,11 +854,25 @@ mod tests {
             slot: RetiredSlotId::R1,
             tag: [7; 4],
             identity_index: 0,
+            identity_prefix: crate::IdentityPrefix::Default,
         };
 
         let encoded = stub.to_bytes();
-        assert_eq!(Stub::from_bytes(&[], 0), None);
-        assert_eq!(Stub::from_bytes(&encoded, 0), Some(stub));
-        assert_eq!(Stub::from_bytes(&encoded[..encoded.len() - 1], 0), None);
+        assert_eq!(
+            Stub::from_bytes(&[], 0, crate::IdentityPrefix::Default),
+            None
+        );
+        assert_eq!(
+            Stub::from_bytes(&encoded, 0, crate::IdentityPrefix::Default),
+            Some(stub)
+        );
+        assert_eq!(
+            Stub::from_bytes(
+                &encoded[..encoded.len() - 1],
+                0,
+                crate::IdentityPrefix::Default
+            ),
+            None
+        );
     }
 }

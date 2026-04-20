@@ -134,6 +134,7 @@ dependencies = [
  "flate2",
  "gumdrop",
  "hex",
+ "hkdf 0.13.0",
  "hpke 0.14.0-pre.1",
  "i18n-embed",
  "i18n-embed-fl",

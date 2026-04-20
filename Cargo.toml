@@ -58,6 +58,7 @@ typenum = {version = "1.19.0", features = ["i128"]}
 sha3 = {version = "0.11.0"}
 ml-kem = {version = "0.3.0-rc.2"}
 rand = "0.10.0"
+hkdf = "0.13.0"
 
 [dev-dependencies]
 flate2 = "1"

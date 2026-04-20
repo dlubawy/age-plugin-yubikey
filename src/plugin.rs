@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 
 use crate::{
-    fl, key,
-    recipient::{Recipient, RecipientLine},
+    fl, key, native,
+    recipient::{dynamic_tag, Recipient, RecipientLine, TAG_BYTES},
     PLUGIN_NAME,
 };
 
@@ -58,10 +58,11 @@ impl RecipientPluginV1 for RecipientPlugin {
         plugin_name: &str,
         bytes: &[u8],
     ) -> Result<(), recipient::Error> {
-        if let Some(stub) = if plugin_name == PLUGIN_NAME {
-            key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default)
-        } else {
-            None
+        if let Some(stub) = match plugin_name {
+            PLUGIN_NAME => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default),
+            "yubikey-tagpq" => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::TagPq),
+            "tagpq" => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::TagPq),
+            _ => None,
         } {
             self.yubikeys.push(stub);
             Ok(())
@@ -136,10 +137,11 @@ impl IdentityPluginV1 for IdentityPlugin {
         plugin_name: &str,
         bytes: &[u8],
     ) -> Result<(), identity::Error> {
-        if let Some(stub) = if plugin_name == PLUGIN_NAME {
-            key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default)
-        } else {
-            None
+        if let Some(stub) = match plugin_name {
+            PLUGIN_NAME => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::Default),
+            "yubikey-tagpq" => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::TagPq),
+            "tagpq" => key::Stub::from_bytes(bytes, index, crate::IdentityPrefix::TagPq),
+            _ => None,
         } {
             self.yubikeys.push(stub);
             Ok(())
@@ -286,8 +288,20 @@ impl SupportedStanza {
     }
 
     pub fn matches_stub(&self, stub: &key::Stub) -> bool {
-        match self {
-            SupportedStanza(line) => stub.tag == line.tag,
+        match stub.identity_prefix {
+            crate::IdentityPrefix::Default => match self {
+                SupportedStanza(line) => stub.tag == line.tag,
+            },
+            crate::IdentityPrefix::TagPq => match self {
+                SupportedStanza(line) => match line.epk_bytes.tag().as_str() {
+                    native::STANZA_TAG => {
+                        let tag = dynamic_tag(&stub.tag, line.epk_bytes.as_bytes());
+                        assert_eq!(line.tag, tag);
+                        line.tag == tag[..TAG_BYTES]
+                    }
+                    _ => false,
+                },
+            },
         }
     }
 
